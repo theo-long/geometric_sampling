@@ -8,8 +8,8 @@ from graph_curvature import GraphCurvature
 
 class CurvatureSampler(Sampler):
     r"""An implementation of graph expoloration subsampling by ORG-sub1 algorithm.
-    The random walker calculates the edges' OR curvature adptaively, then goes to
-    to the next edge with the most different OR curvature. The sampled graph is always connected.  
+    The random walker calculates the edges' curvature adaptively, then goes to
+    to the next edge with the most different curvature. The sampled graph is always connected.  
     For details about the algorithm, please see the Algorithm 1 in manuscript.
     Args:
         number_of_nodes (int): Number of nodes. Default is 100.
@@ -63,14 +63,11 @@ class CurvatureSampler(Sampler):
             self._current_edge = new_edge
             self._current_curvature = list(self._curvature.compute_ricci_curvature_edges([(self._edges[self._current_edge][0],self._edges[self._current_edge][1])]).values())[0]
         else:
-            print(len(self._targets))
-            print(self._current_edge, ' ', self._current_curvature)
             self._target_edges=[self._edges[i] for i in self._targets]
             self._target_curvatures=list(self._curvature.compute_ricci_curvature_edges(self._target_edges).values())
             self._edgecurvatures=np.column_stack((self._targets, self._target_curvatures))
 
             self._curvatures = abs(self._edgecurvatures[:,1]-self._pre_curvature)
-            print(len(np.where(self._curvatures==np.amax(self._curvatures))))
             newidx=int(np.where(self._curvatures==np.amax(self._curvatures))[0][0])
             new_edge = int(self._edgecurvatures[newidx,0])
             self._current_edge = new_edge
