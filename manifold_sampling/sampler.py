@@ -24,7 +24,10 @@ class ManifoldMCMCSampler:
         self.n_dim = n_dim
         self.surface = ConstraintSurface(n_dim, constraint_equation, metric)
         self.scale = scale
-        self.inequality_constraints = inequality_constraints
+        if inequality_constraints:
+            self.inequality_constraints = inequality_constraints
+        else:
+            self.inequality_constraints = []
 
         if density_function:
             self.density_function = density_function
