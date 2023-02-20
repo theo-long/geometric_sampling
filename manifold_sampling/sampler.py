@@ -1,5 +1,6 @@
 from geometric_sampling.manifold_sampling.surfaces import ConstraintSurface
 from geometric_sampling.manifold_sampling.utils import grad
+from geometric_sampling.manifold_sampling.errors import ConstraintError
 
 from typing import Optional, Callable, List
 
@@ -53,6 +54,10 @@ class ManifoldMCMCSampler:
         if new_point is None:
             return current_point
 
+        inequality_satisfaction = self._check_inequality_constraints(new_point)
+        if not inequality_satisfaction:
+            return current_point
+
         # Find v' and p(v') for reverse projection step
         v_prime, p_v_prime = self._reverse_projection(current_point, new_point)
 
@@ -75,6 +80,8 @@ class ManifoldMCMCSampler:
             initial_point = self._get_initial_point()
 
         self.surface._check_constraint(initial_point)
+        if not self._check_inequality_constraints(initial_point):
+            raise ConstraintError("Inequality constraint not satisfied by starting point.")
 
         if not log_interval:
             log_interval = n_samples
@@ -151,6 +158,14 @@ class ManifoldMCMCSampler:
             projection = None
 
         return projection
+
+    def _check_inequality_constraints(self, point: torch.Tensor):
+        for constraint in self.inequality_constraints:
+            if constraint(point) <= 0.0:
+                return False
+            
+        return True
+
 
 
 if __name__ == "__main__":
