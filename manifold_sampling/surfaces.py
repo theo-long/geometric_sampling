@@ -9,7 +9,7 @@ class ConstraintSurface:
         n_dim: int,
         constraint_equation: Callable[[torch.Tensor], torch.Tensor],
         metric: Optional[Callable] = None,
-        tol=1e-6,
+        tol=1e-12,
     ) -> None:
         self.n_dim = n_dim
         self.constraint_equation = constraint_equation
