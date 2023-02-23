@@ -1,6 +1,8 @@
 from geometric_sampling.manifold_sampling.errors import ConstraintError
+from geometric_sampling.manifold_sampling.utils import sympy_func_to_array_func
 from typing import Callable, Optional
 import torch
+import sympy
 
 
 class ConstraintSurface:
@@ -42,6 +44,35 @@ class ConstraintSurface:
                 f"Point x does not satisfy constraint equation with tolerance {self.tol:.2E}"
             )
         return constraint_value
+
+class AlgebraicSurface(ConstraintSurface):
+    def __init__(
+        self,
+        n_dim: int,
+        constraint_equation: sympy.Poly,
+        metric: Optional[Callable] = None,
+        tol=1e-12,
+    ) -> None:
+        self.n_dim = n_dim
+        self.constraint_equation = sympy_func_to_array_func(constraint_equation)
+        self.algebraic_equation = constraint_equation
+        if metric:
+            self.metric = metric
+        else:
+            self.metric = _euclidean_metric
+        self.tol = tol
+
+    def n_intersections(self, p1: torch.Tensor, p2: torch.Tensor):
+        """Find number of intersection points on line between p1 and p2
+
+        Args:
+            p1 (torch.Tensor): first endpoint
+            p2 (torch.Tensor): second endpoint
+        """
+        raise NotImplementedError()
+
+
+
 
 
 def _euclidean_metric(x):
