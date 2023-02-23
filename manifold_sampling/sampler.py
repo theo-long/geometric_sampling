@@ -9,6 +9,8 @@ import numpy as np
 from scipy import stats, optimize
 
 NEWTON_MAX_ITER = 50
+SPHERE_SOLVER_MAX_ITER = 250
+DEFAULT_INTERPOLATING_PRECISION = 1e-4
 
 
 class ManifoldMCMCSampler:
@@ -84,7 +86,9 @@ class ManifoldMCMCSampler:
 
         self.surface._check_constraint(initial_point)
         if not self._check_inequality_constraints(initial_point):
-            raise ConstraintError("Inequality constraint not satisfied by starting point.")
+            raise ConstraintError(
+                "Inequality constraint not satisfied by starting point."
+            )
 
         if not log_interval:
             log_interval = n_samples
@@ -166,9 +170,110 @@ class ManifoldMCMCSampler:
         for constraint in self.inequality_constraints:
             if constraint(point) <= 0.0:
                 return False
-            
+
         return True
 
+
+class ManifoldSphereSampler:
+    def __init__(
+        self,
+        n_dim: int,
+        constraint_equation: Callable,
+        metric: Optional[Callable] = None,
+        inequality_constraints: Optional[List[Callable]] = None,
+    ) -> None:
+        self.n_dim = n_dim
+        self.surface = ConstraintSurface(n_dim, constraint_equation, metric)
+        if inequality_constraints:
+            self.inequality_constraints = inequality_constraints
+        else:
+            self.inequality_constraints = []
+
+    def sample(
+        self,
+        n_samples: int,
+        centre: torch.tensor,
+        radius: float,
+        log_interval: Optional[int] = None,
+    ):
+        if not log_interval:
+            log_interval = n_samples
+
+        p1, p2 = self._get_sphere_points(n_samples, centre, radius)
+        samples = []
+        for i in range(n_samples):
+            if i % log_interval == 0:
+                print(f"step {i}")
+
+            intersection_points = self._find_constraint_solutions(
+                torch.tensor(p1[i])[:, None], torch.tensor(p2[i])[:, None]
+            )
+            if intersection_points:
+                samples.extend(intersection_points)
+
+        return samples
+
+    def _find_constraint_solutions(
+        self,
+        p1: torch.Tensor,
+        p2: torch.Tensor,
+        precision=DEFAULT_INTERPOLATING_PRECISION,
+    ):
+        """Find solution to constraint on line p1-->p2, or return None if not found.
+
+        Args:
+            p1 (torch.Tensor): first point on sphere
+            p2 (torch.Tensor): second point on sphere
+        """
+        # Find sign changes
+        v = p2 - p1
+        t_interpolating = np.arange(0, 1, precision)
+        interpolating_points = p1 + v * t_interpolating
+        (interpolating_indices,) = np.where(
+            np.diff(
+                np.sign(
+                    self.surface.constraint_equation(interpolating_points)
+                ).flatten()
+            )
+            != 0
+        )
+
+        if len(interpolating_indices) == 0:
+            return None
+
+        line_equation = lambda t: self.surface.constraint_equation(p1 + v * t)
+        roots = []
+        for t0 in t_interpolating[interpolating_indices]:
+            solution = optimize.root_scalar(
+                line_equation,
+                bracket=(t0, t0 + precision),
+                x0=t0,
+                maxiter=SPHERE_SOLVER_MAX_ITER,
+            )
+            if solution.converged:
+                roots.append(p1 + v * solution.root)
+
+        if len(roots) == 0:
+            return None
+
+        if len(roots) < self.n_dim - 1:
+            print("missing root")
+            
+        return roots
+
+    def _get_sphere_points(self, n_pairs: int, centre: torch.tensor, radius: float):
+        gaussian_samples = np.random.multivariate_normal(
+            mean=torch.zeros(self.n_dim), cov=torch.eye(self.n_dim), size=(n_pairs, 2)
+        )
+        sphere_samples = gaussian_samples / np.expand_dims(
+            np.linalg.norm(gaussian_samples, axis=-1), -1
+        )
+
+        # scale and transform
+        sphere_samples *= radius
+        sphere_samples += np.expand_dims(centre.T, 0)
+
+        return sphere_samples.transpose(1, 0, 2)
 
 
 if __name__ == "__main__":
