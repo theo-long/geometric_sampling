@@ -2,35 +2,30 @@ import torch
 import torch.nn as nn
 
 
-class MLPBlock(nn.Module):
+class LinearBlock(nn.Module):
     def __init__(
-        self, input_size: int, output_size: int, activation, norm, residual: bool
+        self, input_size: int, output_size: int, activation, norm
     ):
         """Basic MLP block
 
         Args:
             input_size (int): size of input vector
             output_size (int): size of output vector
-            activation : activation layer
             norm : norm layer
-            residual (bool): residual connection
         """
         super().__init__()
         self.input_size = input_size
         self.output_size = output_size
-        self.residual = residual
+        self.activation = activation
 
         self.layers = nn.Sequential(
             nn.Linear(input_size, output_size),
             norm(num_features=output_size),
-            activation(),
         )
 
     def forward(self, x):
-        out = self.layers(x)
-        if self.residual:
-            out += x
-        return out
+        x = self.layers(x)
+        return x
 
 
 class MLP(nn.Module):
@@ -40,29 +35,37 @@ class MLP(nn.Module):
         output_size,
         width,
         depth,
-        activation=nn.ReLU,
+        activation=nn.functional.relu,
         norm=nn.LayerNorm,
-        residual: bool = False,
+        residual: bool = True,
     ):
         super().__init__()
         self.input_size = input_size
         self.output_size = output_size
         self.width = width
         self.depth = depth
+        self.residual = residual
+        self.activation = activation
 
-        layers = [MLPBlock(input_size, width, activation, norm, residual)]
+        layers = [LinearBlock(input_size, width, norm)]
         for i in range(depth - 1):
-            layers.append(MLPBlock(width, width, activation, norm, residual))
+            layers.append(LinearBlock(width, width, norm))
         layers.append(nn.Linear(width, output_size))
 
         self.layers = nn.ModuleList(layers)
 
-    def forward(self, x):
+    def forward(self, x, save_activations=False):
+        if save_activations:
+            self.activations = []
+
         for i, layer in enumerate(self.layers):
-            if i % (len(self.layers) - 1) == 0:
-                x = layer(x)
+            if (layer.input_size == layer.output_size) and self.residual:
+                y = layer(x)
+                if save_activations:
+                    self.activations.append(y)
+                x = x + self.activation(y)
             else:
-                x = x + layer(x)
+                x = layer(x)
         return x
 
 
@@ -75,7 +78,7 @@ class MultiHeadMLP(MLP):
         depth,
         head_depth,
         num_heads,
-        activation=nn.ReLU,
+        activation=nn.functional.relu,
         norm=nn.LayerNorm,
         residual: bool = False,
     ):
