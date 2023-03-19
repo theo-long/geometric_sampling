@@ -241,7 +241,9 @@ class ManifoldSphereSampler:
         if len(interpolating_indices) == 0:
             return None
 
-        line_equation = lambda t: self.surface.constraint_equation(p1 + v * t)
+        def line_equation(t): 
+            return self.surface.constraint_equation(p1 + v * t)
+
         roots = []
         for t0 in t_interpolating[interpolating_indices]:
             solution = optimize.root_scalar(
@@ -277,6 +279,13 @@ class ManifoldSphereSampler:
 
 
 if __name__ == "__main__":
+
+    def sphere_equation(p, R=1):
+        return (np.linalg.norm(p, axis=1) - R)[:, None]
+
+    sampler = ManifoldSphereSampler(3, constraint_equation=sphere_equation)
+    points = sampler.sample(n_samples=10000, centre=torch.tensor([[0.],[0.],[0.]]), radius=2)
+
     from IPython import embed
 
     embed()
