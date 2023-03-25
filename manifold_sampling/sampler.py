@@ -199,6 +199,8 @@ class ManifoldSphereSampler:
         if not log_interval:
             log_interval = n_samples
 
+        centre = centre.squeeze()
+
         p1, p2 = self._get_sphere_points(n_samples, centre, radius)
         samples = []
         for i in range(n_samples):
@@ -206,12 +208,12 @@ class ManifoldSphereSampler:
                 print(f"step {i}")
 
             intersection_points = self._find_constraint_solutions(
-                torch.tensor(p1[i])[:, None], torch.tensor(p2[i])[:, None]
+                torch.tensor(p1[i]), torch.tensor(p2[i])
             )
             if intersection_points:
                 samples.extend(intersection_points)
 
-        return samples
+        return torch.stack(samples)
 
     def _find_constraint_solutions(
         self,
@@ -227,8 +229,8 @@ class ManifoldSphereSampler:
         """
         # Find sign changes
         v = p2 - p1
-        t_interpolating = np.arange(0, 1, precision)
-        interpolating_points = p1 + v * t_interpolating
+        t_interpolating = torch.arange(0, 1 + precision, precision)
+        interpolating_points = p1 + (t_interpolating * v[:, None]).T
         (interpolating_indices,) = np.where(
             np.diff(
                 np.sign(
@@ -242,7 +244,7 @@ class ManifoldSphereSampler:
             return None
 
         def line_equation(t): 
-            return self.surface.constraint_equation(p1 + v * t)
+            return self.surface.constraint_equation((p1 + v * t)[None, :])
 
         roots = []
         for t0 in t_interpolating[interpolating_indices]:
