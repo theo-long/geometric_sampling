@@ -16,15 +16,12 @@ DEFAULT_INTERPOLATING_PRECISION = 1e-4
 class ManifoldMCMCSampler:
     def __init__(
         self,
-        n_dim: int,
+        surface: ConstraintSurface,
         scale: float,
-        constraint_equation: Callable,
-        metric: Optional[Callable] = None,
         density_function: Optional[Callable] = None,
         inequality_constraints: Optional[List[Callable]] = None,
     ) -> None:
-        self.n_dim = n_dim
-        self.surface = ConstraintSurface(n_dim, constraint_equation, metric)
+        self.surface = surface
         self.scale = scale
         if inequality_constraints:
             self.inequality_constraints = inequality_constraints
@@ -43,13 +40,13 @@ class ManifoldMCMCSampler:
 
         # Sample tangent plane
         metric_tensor = self.surface.metric(current_point)
-        covariance = torch.inverse(metric_tensor) * self.scale
+        covariance = np.linalg.inv(metric_tensor) * self.scale
         sample = np.random.multivariate_normal(
-            mean=np.zeros(tangent_space.shape[1]), cov=covariance, size=1
+            mean=np.zeros(tangent_space.shape[0]), cov=covariance, size=1
         )
-        v = tangent_space @ torch.tensor(sample).T
+        v = (sample @ tangent_space).squeeze()
         p_v = stats.multivariate_normal.pdf(
-            sample, mean=np.zeros(tangent_space.shape[1]), cov=covariance
+            sample, mean=np.zeros(tangent_space.shape[0]), cov=covariance
         )
 
         # Solve for projected point
@@ -120,17 +117,21 @@ class ManifoldMCMCSampler:
 
         # find v_prime by projecting new_point - current_point onto tangent space
         dp = current_point - new_point
-        dp_tangent = dp.T @ new_tangent_space
-        v_prime = new_tangent_space @ dp_tangent.T
+        dtangent = new_tangent_space @ dp[:, None]
 
-        # check Newton solver converges
-        if self._project(new_point + v_prime, new_normal_space) is None:
+        v_prime = (dtangent.T @ new_tangent_space).squeeze()
+
+        # check Newton solver converges to reverse point
+        reverse_point = self._project(new_point + v_prime, new_normal_space)
+        if reverse_point is None:
+            return None, None
+        if not np.allclose(current_point, reverse_point, atol=self.surface.tol):
             return None, None
 
         metric_tensor = self.surface.metric(current_point)
-        covariance = torch.inverse(metric_tensor) * self.scale
+        covariance = np.linalg.inv(metric_tensor) * self.scale
         p_v_prime = stats.multivariate_normal.pdf(
-            dp_tangent, mean=np.zeros(new_tangent_space.shape[1]), cov=covariance
+            dtangent.squeeze(), mean=np.zeros(new_tangent_space.shape[0]), cov=covariance
         )
 
         return v_prime, p_v_prime
@@ -148,19 +149,19 @@ class ManifoldMCMCSampler:
         """
 
         projection_equation = lambda x: self.surface.constraint_equation(
-            point + normal_space * x
-        )
-        projection_equation_grad = grad(projection_equation)
-        root, r = optimize.newton(
+            point + x @ normal_space
+        ).squeeze()
+        
+        result = optimize.root(
             projection_equation,
-            0.0,
-            fprime=projection_equation_grad,
-            full_output=True,
-            maxiter=NEWTON_MAX_ITER,
-            disp=False,
+            np.zeros(normal_space.shape[0]),
+            method="hybr",
+            options=dict(
+                maxfev=50,
+            )
         )
-        if r.converged:
-            projection = point + normal_space * root
+        if result.success:
+            projection = point + result.x @ normal_space
         else:
             projection = None
 
@@ -177,13 +178,10 @@ class ManifoldMCMCSampler:
 class ManifoldSphereSampler:
     def __init__(
         self,
-        n_dim: int,
-        constraint_equation: Callable,
-        metric: Optional[Callable] = None,
+        surface:ConstraintSurface,
         inequality_constraints: Optional[List[Callable]] = None,
     ) -> None:
-        self.n_dim = n_dim
-        self.surface = ConstraintSurface(n_dim, constraint_equation, metric)
+        self.surface = surface
         if inequality_constraints:
             self.inequality_constraints = inequality_constraints
         else:
@@ -260,14 +258,14 @@ class ManifoldSphereSampler:
         if len(roots) == 0:
             return None
 
-        if len(roots) < self.n_dim - 1:
+        if len(roots) < self.surface.n_dim - 1:
             print("missing root")
             
         return roots
 
     def _get_sphere_points(self, n_pairs: int, centre: torch.tensor, radius: float):
         gaussian_samples = np.random.multivariate_normal(
-            mean=torch.zeros(self.n_dim), cov=torch.eye(self.n_dim), size=(n_pairs, 2)
+            mean=torch.zeros(self.surface.n_dim), cov=torch.eye(self.surface.n_dim), size=(n_pairs, 2)
         )
         sphere_samples = gaussian_samples / np.expand_dims(
             np.linalg.norm(gaussian_samples, axis=-1), -1
