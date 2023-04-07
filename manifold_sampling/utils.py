@@ -17,6 +17,7 @@ def sympy_func_to_array_func(args, expr: sympy.Expr):
         args: arguments (usually a list of sympy symbols)
         expr (sympy.Expr): sympy expression
     """
-    f = sympy.lambdify(args, expr)
-    array_f = lambda a : f(*a) # We assume rows correspond to different args
+    f = sympy.lambdify(args, expr, modules=["scipy", "numpy"], cse=True)
+    def array_f(a):
+        return f(*a) # We assume rows correspond to different args
     return array_f
