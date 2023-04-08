@@ -77,7 +77,7 @@ class ManifoldMCMCSampler(Sampler):
         """
         self.surface = surface
         self.scale = scale
-        self.use_jac = True
+        self.use_jac = use_jac
         if inequality_constraints:
             self.inequality_constraints = inequality_constraints
         else:
