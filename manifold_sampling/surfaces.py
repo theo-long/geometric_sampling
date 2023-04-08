@@ -26,7 +26,7 @@ class ConstraintSurface:
             self.metric = metric
         else:
             out = constraint_equation(torch.zeros(n_dim))
-            self.metric = _euclidean_metric(n_dim - out.shape[1])
+            self.metric = _euclidean_metric(n_dim - out.shape[0])
         self.tol = tol
 
     def mean_curvature(self, x: np.array):
@@ -307,35 +307,34 @@ class SimpleAlgebraicIntersection(AlgebraicSurface):
 
 class OrthogonalGroup(AlgebraicSurface):
     def __init__(
-        self, n_dim: int, metric: Optional[Callable] = None, tol=DEFAULT_TOLERANCE
+        self, n: int, metric: Optional[Callable] = None, tol=DEFAULT_TOLERANCE
     ) -> None:
 
         # Add constraints of the form \sum_k^n x_{ik}^2 = 0 \forall i
         squared_component_equations = []
-        for i in range(n_dim):
-            row_symbols = sympy.symbols(f"x{i}(:{n_dim})")
+        for i in range(n):
+            row_symbols = sympy.symbols(f"x{i}(:{n})")
             eq = sympy.Poly(sum([s**2 for s in row_symbols]))
             squared_component_equations.append(eq - 1)
 
         # Add constraints of the form \sum_k^n x_{ik}x_{jk} = 0 \forall i \forall j > i
         cross_component_equations = []
-        for i in range(n_dim):
-            for j in range(i + 1, n_dim):
-                i_symbols = sympy.symbols(f"x{i}(:{n_dim})")
-                j_symbols = sympy.symbols(f"x{j}(:{n_dim})")
+        for i in range(n):
+            for j in range(i + 1, n):
+                i_symbols = sympy.symbols(f"x{i}(:{n})")
+                j_symbols = sympy.symbols(f"x{j}(:{n})")
                 eq = sympy.Poly(sum([xi * xj for xi, xj in zip(i_symbols, j_symbols)]))
                 cross_component_equations.append(eq)
 
         constraint_equations = squared_component_equations + cross_component_equations
 
         super().__init__(
-            n_dim,
+            n ** 2,
             constraint_equations,
-            sympy.symbols(f"x:{n_dim}:{n_dim}"),
+            sympy.symbols(f"x:{n}:{n}"),
             metric,
             tol,
         )
-        self.args = sympy.symbols(f"x:{n_dim}:{n_dim}")
 
 
 def _euclidean_metric(n_dim):
