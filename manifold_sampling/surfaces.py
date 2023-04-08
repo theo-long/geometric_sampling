@@ -139,7 +139,7 @@ class AlgebraicSurface(ConstraintSurface):
     def generate_normal_space(self, x: torch.Tensor):
         """Generates the subspace normal to the tangent space at x, given as an orthonormal basis."""
         jac = self.jacobian(x)
-        return jac
+        return jac / np.linalg.norm(jac, axis=1)
 
     def n_intersections(self, p1: torch.Tensor, p2: torch.Tensor):
         """Find number of intersection points on line between p1 and p2
