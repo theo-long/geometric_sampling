@@ -1,6 +1,6 @@
 from geometric_sampling.manifold_sampling.errors import ConstraintError
 from geometric_sampling.manifold_sampling.utils import sympy_func_to_array_func
-from typing import Callable, Optional, List, Union
+from typing import Callable, Optional, List, Union, Iterable
 import torch
 import numpy as np
 import scipy
@@ -98,11 +98,17 @@ class AlgebraicSurface(ConstraintSurface):
         self,
         n_dim: int,
         constraint_equations: Union[List[sympy.Poly], sympy.Poly],
+        args: Optional[Iterable[sympy.Symbol]] = None,
         metric: Optional[Callable] = None,
         tol=DEFAULT_TOLERANCE,
     ) -> None:
         self.n_dim = n_dim
-        self.args = symbols(f"x:{n_dim}")
+
+        if args is None:
+            self.args = symbols(f"x:{n_dim}")
+        else:
+            self.args = args
+
         # convert to expressions from poly
         if type(constraint_equations) is not list:
             constraint_equations = [constraint_equations.expr]
@@ -271,6 +277,30 @@ class SimpleAlgebraicIntersection(AlgebraicSurface):
         super().__init__(
             n_dim=3, constraint_equations=[eq1, eq2], metric=metric, tol=tol
         )
+
+class OrthogonalGroup(AlgebraicSurface):
+    def __init__(self, n_dim: int, metric: Optional[Callable] = None, tol=DEFAULT_TOLERANCE) -> None:
+
+        # Add constraints of the form \sum_k^n x_{ik}^2 = 0 \forall i
+        squared_component_equations = [] 
+        for i in range(n_dim):
+            row_symbols = sympy.symbols(f"x{i}(:{n_dim})")
+            eq = sympy.Poly(sum([s ** 2 for s in row_symbols]))
+            squared_component_equations.append(eq - 1)
+            
+        # Add constraints of the form \sum_k^n x_{ik}x_{jk} = 0 \forall i \forall j > i
+        cross_component_equations = [] 
+        for i in range(n_dim):
+            for j in range(i + 1, n_dim):
+                i_symbols = sympy.symbols(f"x{i}(:{n_dim})")
+                j_symbols = sympy.symbols(f"x{j}(:{n_dim})")
+                eq = sympy.Poly(sum([xi * xj for xi, xj in zip(i_symbols, j_symbols)]))
+                cross_component_equations.append(eq)
+
+        constraint_equations = squared_component_equations + cross_component_equations
+        
+        super().__init__(n_dim, constraint_equations, sympy.symbols(f"x:{n_dim}:{n_dim}"), metric, tol)
+        self.args = sympy.symbols(f"x:{n_dim}:{n_dim}")
 
 
 def _euclidean_metric(n_dim):
