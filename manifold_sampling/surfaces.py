@@ -51,7 +51,9 @@ class ConstraintSurface:
         """Generate subspaces normal and tangent to manifold at x."""
         normal = self.generate_normal_space(x)
         if len(x.shape) > 1:
-            tangent = np.stack([scipy.linalg.null_space(n.T).T for n in normal.T], axis=-1)
+            tangent = np.stack(
+                [scipy.linalg.null_space(n.T).T for n in normal.T], axis=-1
+            )
         else:
             tangent = scipy.linalg.null_space(normal).T
         return tangent, normal
@@ -73,24 +75,33 @@ class ConstraintSurface:
 def symbolic_jacobian(f: sympy.Matrix, args) -> sympy.Matrix:
     return f.jacobian(args)
 
+
 def symbolic_hessian(f: sympy.Matrix, args) -> sympy.Matrix:
     return sympy.hessian(f, args)
+
 
 def symbolic_mean_curvature(f: sympy.Matrix, args) -> sympy.Matrix:
     jac = symbolic_jacobian(f, args)
     hessian = symbolic_hessian(f, args)
-    return ((jac @ hessian @ jac.T)[0] - jac.norm() ** 2 * hessian.trace()) / jac.norm() ** 3
+    return (
+        (jac @ hessian @ jac.T)[0] - jac.norm() ** 2 * hessian.trace()
+    ) / jac.norm() ** 3
+
 
 def symbolic_gaussian_curvature(f: sympy.Matrix, args) -> sympy.Matrix:
     jac = symbolic_jacobian(f, args)
     hessian = symbolic_hessian(f, args)
-    return -(sympy.Matrix([[hessian, jac.T], [jac, sympy.zeros(1, 1)]]).det() / (jac.norm() ** 4))
+    return -(
+        sympy.Matrix([[hessian, jac.T], [jac, sympy.zeros(1, 1)]]).det()
+        / (jac.norm() ** 4)
+    )
+
 
 def symbolic_shape_operator(f: sympy.Matrix, args) -> sympy.Matrix:
     jac = symbolic_jacobian(f, args)
     hessian = symbolic_hessian(f, args)
     normal = jac / jac.norm()
-    return (sympy.eye(hessian.shape[0]) -  normal.T @ normal) @ (hessian / jac.norm())
+    return (sympy.eye(hessian.shape[0]) - normal.T @ normal) @ (hessian / jac.norm())
 
 
 class AlgebraicSurface(ConstraintSurface):
@@ -161,16 +172,20 @@ class AlgebraicSurface(ConstraintSurface):
         shape_operator_func = getattr(self, "_shape_operator_func", None)
         if shape_operator_func is None:
             shape_operator = symbolic_shape_operator(self.algebraic_equation, self.args)
-            self._shape_operator_func = sympy_func_to_array_func(self.args, shape_operator)
+            self._shape_operator_func = sympy_func_to_array_func(
+                self.args, shape_operator
+            )
             return self._shape_operator_func(p)
         else:
             return self._shape_operator_func(p)
-    
+
     def mean_curvature(self, p: np.array):
         mean_curvature_func = getattr(self, "_mean_curvature_func", None)
         if mean_curvature_func is None:
             mean_curvature = symbolic_mean_curvature(self.algebraic_equation, self.args)
-            self._mean_curvature_func = sympy_func_to_array_func(self.args, mean_curvature)
+            self._mean_curvature_func = sympy_func_to_array_func(
+                self.args, mean_curvature
+            )
             return self._mean_curvature_func(p)
         else:
             return self._mean_curvature_func(p)
@@ -178,8 +193,12 @@ class AlgebraicSurface(ConstraintSurface):
     def gaussian_curvature(self, p: np.array):
         gaussian_curvature_func = getattr(self, "_gaussian_curvature_func", None)
         if gaussian_curvature_func is None:
-            gaussian_curvature = symbolic_gaussian_curvature(self.algebraic_equation, self.args)
-            self._gaussian_curvature_func = sympy_func_to_array_func(self.args, gaussian_curvature)
+            gaussian_curvature = symbolic_gaussian_curvature(
+                self.algebraic_equation, self.args
+            )
+            self._gaussian_curvature_func = sympy_func_to_array_func(
+                self.args, gaussian_curvature
+            )
             return self._gaussian_curvature_func(p)
         else:
             return self._gaussian_curvature_func(p)
@@ -259,10 +278,17 @@ class RoundedCube(AlgebraicSurface):
 
 class Ellipsoid(AlgebraicSurface):
     def __init__(
-        self, x_factor: float, y_factor: float, z_factor: float, metric: Optional[Callable] = None, tol=DEFAULT_TOLERANCE
+        self,
+        x_factor: float,
+        y_factor: float,
+        z_factor: float,
+        metric: Optional[Callable] = None,
+        tol=DEFAULT_TOLERANCE,
     ) -> None:
         """Stretched sphere shape."""
-        constraint_equation = sympy.Poly(x_factor*x0**2 + y_factor*x1**2 + z_factor * x2**2 - 1)
+        constraint_equation = sympy.Poly(
+            x_factor * x0**2 + y_factor * x1**2 + z_factor * x2**2 - 1
+        )
         super().__init__(
             n_dim=3, constraint_equations=constraint_equation, metric=metric, tol=tol
         )
@@ -278,18 +304,21 @@ class SimpleAlgebraicIntersection(AlgebraicSurface):
             n_dim=3, constraint_equations=[eq1, eq2], metric=metric, tol=tol
         )
 
+
 class OrthogonalGroup(AlgebraicSurface):
-    def __init__(self, n_dim: int, metric: Optional[Callable] = None, tol=DEFAULT_TOLERANCE) -> None:
+    def __init__(
+        self, n_dim: int, metric: Optional[Callable] = None, tol=DEFAULT_TOLERANCE
+    ) -> None:
 
         # Add constraints of the form \sum_k^n x_{ik}^2 = 0 \forall i
-        squared_component_equations = [] 
+        squared_component_equations = []
         for i in range(n_dim):
             row_symbols = sympy.symbols(f"x{i}(:{n_dim})")
-            eq = sympy.Poly(sum([s ** 2 for s in row_symbols]))
+            eq = sympy.Poly(sum([s**2 for s in row_symbols]))
             squared_component_equations.append(eq - 1)
-            
+
         # Add constraints of the form \sum_k^n x_{ik}x_{jk} = 0 \forall i \forall j > i
-        cross_component_equations = [] 
+        cross_component_equations = []
         for i in range(n_dim):
             for j in range(i + 1, n_dim):
                 i_symbols = sympy.symbols(f"x{i}(:{n_dim})")
@@ -298,10 +327,16 @@ class OrthogonalGroup(AlgebraicSurface):
                 cross_component_equations.append(eq)
 
         constraint_equations = squared_component_equations + cross_component_equations
-        
-        super().__init__(n_dim, constraint_equations, sympy.symbols(f"x:{n_dim}:{n_dim}"), metric, tol)
+
+        super().__init__(
+            n_dim,
+            constraint_equations,
+            sympy.symbols(f"x:{n_dim}:{n_dim}"),
+            metric,
+            tol,
+        )
         self.args = sympy.symbols(f"x:{n_dim}:{n_dim}")
 
 
 def _euclidean_metric(n_dim):
-    return lambda x : np.eye(n_dim)
+    return lambda x: np.eye(n_dim)
