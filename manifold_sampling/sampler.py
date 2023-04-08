@@ -253,6 +253,13 @@ class ManifoldSphereSampler(Sampler):
         else:
             self.density_function = lambda *args: 1.0
 
+        # Precompute line equations
+        p, q = sympy.symbols(f'p:{self.surface.n_dim}'), sympy.symbols(f'q:{self.surface.n_dim}')
+        line = sympy.Matrix(p) + t * (sympy.Matrix(q) - sympy.Matrix(p))
+        exp = self.surface.algebraic_equation[0].subs(zip(sympy.symbols(f'x:{self.surface.n_dim}'), line))
+        coeffs = sympy.Poly(exp, t).all_coeffs()
+        self.line_eq_coeffs = sympy_func_to_array_func(p + q, coeffs)
+
     def sample(
         self,
         n_samples: int,
@@ -265,21 +272,22 @@ class ManifoldSphereSampler(Sampler):
 
         p1, p2 = _get_sphere_points(self.surface.n_dim, n_samples, centre, radius)
         samples = []
+        reject_codes = []
         for i in trange(n_samples):
 
-            intersection_points = self._find_constraint_solutions(
-                p1[i], p2[i], precision
+            intersection_point, reject_code = self._find_constraint_solutions(
+                p1[i], p2[i]
             )
-            if intersection_points:
-                samples.extend(intersection_points)
+            if intersection_point is not None:
+                samples.append(intersection_point)
+            reject_codes.append(reject_code)
 
-        return np.stack(samples)
+        return np.stack(samples), reject_codes
 
     def _find_constraint_solutions(
         self,
         p1: torch.Tensor,
         p2: torch.Tensor,
-        precision=DEFAULT_INTERPOLATING_PRECISION,
     ):
         """Find solution to constraint on line p1-->p2, or return None if not found.
 
@@ -288,42 +296,17 @@ class ManifoldSphereSampler(Sampler):
             p2 (torch.Tensor): second point on sphere
         """
         # Find sign changes
-        v = p2 - p1
-        t_interpolating = np.arange(0, 1 + precision, precision)
-        interpolating_points = p1 + (t_interpolating * v[:, None]).T
-        (interpolating_indices,) = np.where(
-            np.diff(
-                np.sign(
-                    self.surface.constraint_equation(interpolating_points.T)
-                ).flatten()
-            )
-            != 0
-        )
+        coeffs = self.line_eq_coeffs(np.concatenate([p1, p2]))
+        poly = np.polynomial.Polynomial(coeffs[::-1])
+        roots = poly.roots()
 
-        if len(interpolating_indices) == 0:
-            return None
+        sols_mask = (np.real_if_close(roots) == np.real(roots)) & (np.real(roots) >= 0) & (np.real(roots) <= 1)
+        sols = np.real(roots[sols_mask])
 
-        def line_equation(t):
-            return self.surface.constraint_equation((p1 + v * t))
-
-        roots = []
-        for t0 in t_interpolating[interpolating_indices]:
-            solution = optimize.root_scalar(
-                line_equation,
-                bracket=(t0, t0 + precision),
-                x0=t0,
-                maxiter=SPHERE_SOLVER_MAX_ITER,
-            )
-            if solution.converged:
-                roots.append(p1 + v * solution.root)
-
-        if len(roots) == 0:
-            return None
-
-        if len(roots) < self.surface.n_dim - 1:
-            log.info("missing root")
-
-        return roots
+        if len(sols) == 0:
+            return None, RejectCode.PROJECTION
+        else:
+            return p1 + np.random.choice(sols) * (p2 - p1), RejectCode.NONE
 
 
 class ManifoldSphereMCMCSampler(Sampler):
