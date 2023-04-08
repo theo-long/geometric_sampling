@@ -61,9 +61,23 @@ class ManifoldMCMCSampler(Sampler):
         curvature_adaptive_scale: Optional[str] = None,
         alpha=1.0,
         min_scale=0.1,
+        use_jac=True,
     ) -> None:
+        """An MCMC sampler for constraint manifolds based on Zappa et al. (2017)
+
+        Args:
+            surface (ConstraintSurface): The surface to sample from
+            scale (float): length scale for proposal gaussian
+            density_function (Optional[Callable], optional): The unnormalized pdf on the surface. If None defaults to uniform. Defaults to None.
+            inequality_constraints (Optional[List[Callable]], optional): Additional inequality constraints for sampler. Defaults to None.
+            curvature_adaptive_scale (Optional[str], optional): Method to use for curvature adaptive proposals. Defaults to None.
+            alpha (float, optional): alpha parameter for curvature adaptation. Defaults to 1.0.
+            min_scale (float, optional): minimum scale parameter for curvature adaptation. Defaults to 0.1.
+            use_jac (bool, optional): Whether or not to use gradients for projection steps. Defaults to True.
+        """
         self.surface = surface
         self.scale = scale
+        self.use_jac = True
         if inequality_constraints:
             self.inequality_constraints = inequality_constraints
         else:
@@ -212,6 +226,11 @@ class ManifoldMCMCSampler(Sampler):
             point + x @ normal_space
         ).squeeze()
 
+        if self.use_jac:
+            projected_jacobian = lambda x: self.surface.jacobian(point + x @ normal_space) @ normal_space.T
+        else:
+            projected_jacobian = None
+
         result = optimize.root(
             projection_equation,
             np.zeros(normal_space.shape[0]),
@@ -219,6 +238,7 @@ class ManifoldMCMCSampler(Sampler):
             options=dict(
                 maxfev=50,
             ),
+            jac=projected_jacobian,
         )
         if result.success:
             projection = point + result.x @ normal_space
