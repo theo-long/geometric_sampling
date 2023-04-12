@@ -3,11 +3,11 @@ from geometric_sampling.manifold_sampling.surfaces import (
     AlgebraicSurface,
 )
 from geometric_sampling.manifold_sampling.utils import grad, sympy_func_to_array_func
-from geometric_sampling.manifold_sampling.errors import ConstraintError
+from geometric_sampling.manifold_sampling.solve import generate_line_equation_coefficients, find_line_intersections, t
+from geometric_sampling.manifold_sampling.errors import ConstraintError, RejectCode
 
 from typing import Optional, Callable, List
 from abc import ABC, abstractmethod
-from enum import IntEnum
 from multiprocessing import Pool
 from tqdm import trange
 
@@ -18,21 +18,11 @@ import sympy
 
 from logging import getLogger
 
-t = sympy.symbols('t')
 log = getLogger()
 
 NEWTON_MAX_ITER = 50
 SPHERE_SOLVER_MAX_ITER = 250
 DEFAULT_INTERPOLATING_PRECISION = 1e-4
-
-
-class RejectCode(IntEnum):
-    NONE = 0
-    INEQUALITY = 1
-    PROJECTION = 2
-    REVERSE_PROJECTION = 3
-    MH = 4
-
 
 class Sampler(ABC):
     @abstractmethod
@@ -88,16 +78,15 @@ class ManifoldMCMCSampler(Sampler):
         else:
             self.density_function = lambda *args: 1.0
 
-        if curvature_adaptive_scale is None:
-            self.adaptive_scale = (
-                lambda point: np.linalg.inv(self.surface.metric(point)) * self.scale
-            )
+        cov_matrix = np.eye(self.surface.n_dim - self.surface.codim) * self.scale
+        if curvature_adaptive_scale is None:          
+            self.adaptive_scale = lambda point: cov_matrix
         elif curvature_adaptive_scale == "mean_curvature":
             self.adaptive_scale = (
-                lambda point: np.linalg.inv(self.surface.metric(point))
-                * self.scale
-                * (
-                    min_scale
+                lambda point:
+                (
+                    cov_matrix
+                    * min_scale
                     + (1 - min_scale)
                     * np.exp(-1 * (self.surface.mean_curvature(point) / alpha) ** 2)
                 )
@@ -106,6 +95,10 @@ class ManifoldMCMCSampler(Sampler):
             raise ValueError(
                 f"value {curvature_adaptive_scale} for curvature_adaptive_scale not recognized"
             )
+
+        # pre-compute for speed
+        self._tangent_space_mean = np.zeros(self.surface.n_dim - self.surface.codim)
+        self._normal_space_mean = np.zeros(self.surface.codim)
 
     def step(self, current_point):
         # Generate orthogonal basis for tangent plane and normal
@@ -116,30 +109,30 @@ class ManifoldMCMCSampler(Sampler):
         # Sample tangent plane
         covariance = self.adaptive_scale(current_point)
         sample = np.random.multivariate_normal(
-            mean=np.zeros(tangent_space.shape[0]), cov=covariance, size=1
+            mean=self._tangent_space_mean, cov=covariance, size=1
         )
         v = (sample @ tangent_space).squeeze()
         p_v = stats.multivariate_normal.pdf(
-            sample, mean=np.zeros(tangent_space.shape[0]), cov=covariance
+            sample,  mean=self._tangent_space_mean, cov=covariance
         )
 
         # Solve for projected point
-        new_point = self._project(current_point + v, normal_space)
+        new_point, nfev = self._project(current_point + v, normal_space)
 
         # If projection fails, reject
         if new_point is None:
-            return current_point, RejectCode.PROJECTION
+            return current_point, RejectCode.PROJECTION, nfev
 
         inequality_satisfaction = self._check_inequality_constraints(new_point)
         if not inequality_satisfaction:
-            return current_point, RejectCode.INEQUALITY
+            return current_point, RejectCode.INEQUALITY, nfev
 
         # Find v' and p(v') for reverse projection step
         v_prime, p_v_prime = self._reverse_projection(current_point, new_point)
 
         # Check reverse projection works
         if v_prime is None:
-            return current_point, RejectCode.REVERSE_PROJECTION
+            return current_point, RejectCode.REVERSE_PROJECTION, nfev
 
         # Metropolis-Hastings rejection step
         u = np.random.random()
@@ -147,9 +140,9 @@ class ManifoldMCMCSampler(Sampler):
             self.density_function(current_point) * p_v
         )
         if u > acceptance_prob:
-            return current_point, RejectCode.MH
+            return current_point, RejectCode.MH, nfev
 
-        return new_point, RejectCode.NONE
+        return new_point, RejectCode.NONE, nfev
 
     def sample(self, n_samples, initial_point=None):
         if initial_point is None:
@@ -162,14 +155,18 @@ class ManifoldMCMCSampler(Sampler):
             )
 
         current_point = initial_point
-        samples = [current_point]
-        reject_codes = [RejectCode.NONE]
+        samples = np.zeros((n_samples + 1, self.surface.n_dim))
+        samples[0] = current_point
+        reject_codes = np.zeros(n_samples + 1)
+        reject_codes[0] = RejectCode.NONE
+        project_steps = np.zeros(n_samples + 1)
         for i in trange(n_samples):
-            current_point, reject_code = self.step(current_point)
-            samples.append(current_point)
-            reject_codes.append(reject_code)
+            current_point, reject_code, nfev = self.step(current_point)
+            samples[i] = current_point
+            reject_codes[i] = reject_code
+            project_steps[i] = nfev
 
-        return np.stack(samples), reject_codes
+        return np.stack(samples), reject_codes, project_steps
 
     def _get_initial_point(self):
         raise NotImplementedError()
@@ -195,7 +192,7 @@ class ManifoldMCMCSampler(Sampler):
         v_prime = (dtangent.T @ new_tangent_space).squeeze()
 
         # check Newton solver converges to reverse point
-        reverse_point = self._project(new_point + v_prime, new_normal_space)
+        reverse_point, _ = self._project(new_point + v_prime, new_normal_space)
         if reverse_point is None:
             return None, None
         if not np.allclose(current_point, reverse_point, atol=self.surface.tol):
@@ -204,7 +201,7 @@ class ManifoldMCMCSampler(Sampler):
         covariance = self.adaptive_scale(new_point)
         p_v_prime = stats.multivariate_normal.pdf(
             dtangent.squeeze(),
-            mean=np.zeros(new_tangent_space.shape[0]),
+            mean=self._tangent_space_mean,
             cov=covariance,
         )
 
@@ -233,10 +230,10 @@ class ManifoldMCMCSampler(Sampler):
 
         result = optimize.root(
             projection_equation,
-            np.zeros(normal_space.shape[0]),
+            self._normal_space_mean,
             method="hybr",
             options=dict(
-                maxfev=50,
+                maxfev=NEWTON_MAX_ITER,
             ),
             jac=projected_jacobian,
         )
@@ -245,7 +242,7 @@ class ManifoldMCMCSampler(Sampler):
         else:
             projection = None
 
-        return projection
+        return projection, result.nfev
 
     def _check_inequality_constraints(self, point: torch.Tensor):
         for constraint in self.inequality_constraints:
@@ -274,11 +271,7 @@ class ManifoldSphereSampler(Sampler):
             self.density_function = lambda *args: 1.0
 
         # Precompute line equations
-        p, q = sympy.symbols(f'p:{self.surface.n_dim}'), sympy.symbols(f'q:{self.surface.n_dim}')
-        line = sympy.Matrix(p) + t * (sympy.Matrix(q) - sympy.Matrix(p))
-        exp = self.surface.algebraic_equation[0].subs(zip(sympy.symbols(f'x:{self.surface.n_dim}'), line))
-        coeffs = sympy.Poly(exp, t).all_coeffs()
-        self.line_eq_coeffs = sympy_func_to_array_func(p + q, coeffs)
+        self.line_eq_coeffs = generate_line_equation_coefficients(self.surface)
 
     def sample(
         self,
@@ -294,39 +287,16 @@ class ManifoldSphereSampler(Sampler):
         samples = []
         reject_codes = []
         for i in trange(n_samples):
-
-            intersection_point, reject_code = self._find_constraint_solutions(
-                p1[i], p2[i]
-            )
+            p, q = p1[i], p2[i]
+            coeffs = self.line_eq_coeffs(np.concatenate([p, q]))
+            intersection_point = find_line_intersections(coeffs, p, q)
             if intersection_point is not None:
                 samples.append(intersection_point)
-            reject_codes.append(reject_code)
+                reject_codes.append(RejectCode.NONE)
+            else:
+                reject_codes.append(RejectCode.PROJECTION)
 
         return np.stack(samples), reject_codes
-
-    def _find_constraint_solutions(
-        self,
-        p1: torch.Tensor,
-        p2: torch.Tensor,
-    ):
-        """Find solution to constraint on line p1-->p2, or return None if not found.
-
-        Args:
-            p1 (torch.Tensor): first point on sphere
-            p2 (torch.Tensor): second point on sphere
-        """
-        # Find sign changes
-        coeffs = self.line_eq_coeffs(np.concatenate([p1, p2]))
-        poly = np.polynomial.Polynomial(coeffs[::-1])
-        roots = poly.roots()
-
-        sols_mask = (np.real_if_close(roots) == np.real(roots)) & (np.real(roots) >= 0) & (np.real(roots) <= 1)
-        sols = np.real(roots[sols_mask])
-
-        if len(sols) == 0:
-            return None, RejectCode.PROJECTION
-        else:
-            return p1 + np.random.choice(sols) * (p2 - p1), RejectCode.NONE
 
 
 class ManifoldSphereMCMCSampler(Sampler):
@@ -354,12 +324,12 @@ class ManifoldSphereMCMCSampler(Sampler):
 
         if curvature_adaptive_scale is None:
             self.adaptive_scale = (
-                lambda point: np.linalg.inv(self.surface.metric(point)) * self.scale
+                lambda point: np.linalg.inv(self.surface.metric(point)) * self.scale ** 2
             )
         elif curvature_adaptive_scale == "mean_curvature":
             self.adaptive_scale = (
                 lambda point: np.linalg.inv(self.surface.metric(point))
-                * self.scale
+                * self.scale ** 2
                 * (
                     min_scale
                     + (1 - min_scale)
@@ -372,27 +342,17 @@ class ManifoldSphereMCMCSampler(Sampler):
             )
 
         # Precompute line equations
-        p, q = sympy.symbols(f'p:{self.surface.n_dim}'), sympy.symbols(f'q:{self.surface.n_dim}')
-        line = sympy.Matrix(p) + t * (sympy.Matrix(q) - sympy.Matrix(p))
-        exp = self.surface.algebraic_equation[0].subs(zip(sympy.symbols(f'x:{self.surface.n_dim}'), line))
-        coeffs = sympy.Poly(exp, t).all_coeffs()
-        self.line_eq_coeffs = sympy_func_to_array_func(p + q, coeffs)
+        self.line_eq_coeffs = generate_line_equation_coefficients(self.surface)
 
     def step(self, current_point, sphere_pair):
         scale = self.adaptive_scale(current_point)
         sphere_pair = (scale @ sphere_pair) + current_point
 
         coeffs = self.line_eq_coeffs(sphere_pair.flatten())
-        poly = np.polynomial.Polynomial(coeffs[::-1])
-        roots = poly.roots()
+        new_point = find_line_intersections(coeffs, sphere_pair[0], sphere_pair[1])
 
-        sols_mask = (np.real_if_close(roots) == np.real(roots)) & (np.real(roots) >= 0) & (np.real(roots) <= 1)
-        sols = np.real(roots[sols_mask])
-
-        if len(sols) == 0:
+        if new_point is None:
             return current_point, RejectCode.PROJECTION
-        else:
-            new_point = sphere_pair[0] + np.random.choice(sols) * (sphere_pair[1] - sphere_pair[0])
 
         # Check constraint
         inequality_satisfaction = self._check_inequality_constraints(new_point)
