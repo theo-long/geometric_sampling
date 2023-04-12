@@ -1,5 +1,6 @@
 import torch
 import sympy
+import numpy as np
 
 def grad(f):
     """Wrapper that returns a function computing gradient of f."""
@@ -21,3 +22,16 @@ def sympy_func_to_array_func(args, expr: sympy.Expr):
     def array_f(a):
         return f(*a) # We assume rows correspond to different args
     return array_f
+
+def torus_surface_element(U, V, r, R):
+    """Surface element for integrating 3d torus in U,V plane"""
+    return r * (R + np.cos(V))
+
+def torus_wrapper(f, r, R):
+    """Wrapper that turns an (x, y, z) torus function to a (u, v) function."""
+    def torus_f(U, V):
+        X = (R+r*np.cos(V))*np.cos(U)
+        Y = (R+r*np.cos(V))*np.sin(U)
+        Z = r*np.sin(V)
+        return f((X, Y, Z))
+    return torus_f
