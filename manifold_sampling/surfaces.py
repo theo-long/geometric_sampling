@@ -27,6 +27,7 @@ class ConstraintSurface:
         else:
             out = constraint_equation(torch.zeros(n_dim))
             self.metric = _euclidean_metric(n_dim - out.shape[0])
+            self.codim = out.shape[0]
         self.tol = tol
 
     def mean_curvature(self, x: np.array):
@@ -35,8 +36,8 @@ class ConstraintSurface:
     def generate_tangent_space(self, x: torch.Tensor):
         """Generates the tangent space at a point x, given as an orthonormal basis."""
         normal = self.generate_normal_space(x)
-        tangent = scipy.linalg.null_space(normal).T
-        return tangent
+        Q, _ = np.linalg.qr(normal.T)
+        return Q[:, -self.n_dim + self.codim :].T
 
     def generate_normal_space(self, x: torch.Tensor):
         """Generates the subspace normal to the tangent space at x, given as an orthonormal basis."""
@@ -50,13 +51,8 @@ class ConstraintSurface:
     def generate_tangent_and_normal_space(self, x: torch.Tensor):
         """Generate subspaces normal and tangent to manifold at x."""
         normal = self.generate_normal_space(x)
-        if len(x.shape) > 1:
-            tangent = np.stack(
-                [scipy.linalg.null_space(n.T).T for n in normal.T], axis=-1
-            )
-        else:
-            tangent = scipy.linalg.null_space(normal).T
-        return tangent, normal
+        Q, _ = np.linalg.qr(normal.T)
+        return Q[:, -self.n_dim + self.codim :].T, normal
 
     def _check_constraint(self, x):
         constraint_value = self.constraint_equation(x)
@@ -122,8 +118,10 @@ class AlgebraicSurface(ConstraintSurface):
 
         # convert to expressions from poly
         if type(constraint_equations) is not list:
+            self.codim = 1
             constraint_equations = [constraint_equations.expr]
         else:
+            self.codim = len(constraint_equations)
             constraint_equations = [eq.expr for eq in constraint_equations]
 
         self.constraint_equation = sympy_func_to_array_func(
@@ -139,7 +137,7 @@ class AlgebraicSurface(ConstraintSurface):
     def generate_normal_space(self, x: torch.Tensor):
         """Generates the subspace normal to the tangent space at x, given as an orthonormal basis."""
         jac = self.jacobian(x)
-        return jac / np.linalg.norm(jac, axis=1)
+        return jac / np.linalg.norm(jac, axis=1)[:, None]
 
     def n_intersections(self, p1: torch.Tensor, p2: torch.Tensor):
         """Find number of intersection points on line between p1 and p2
@@ -299,7 +297,7 @@ class SimpleAlgebraicIntersection(AlgebraicSurface):
         self, metric: Optional[Callable] = None, tol=DEFAULT_TOLERANCE
     ) -> None:
         eq1 = sympy.Poly(x0**4 + x1**3 + x1 * x1 + x0**2 * x2 - x2 - 1)
-        eq2 = sympy.Poly(x2 * x1 - x1 * x1 - 1)
+        eq2 = sympy.Poly(2 * x1 - x2)
         super().__init__(
             n_dim=3, constraint_equations=[eq1, eq2], metric=metric, tol=tol
         )
@@ -335,6 +333,16 @@ class OrthogonalGroup(AlgebraicSurface):
             metric,
             tol,
         )
+
+class RandomAlgebraicSurface(AlgebraicSurface):
+    def __init__(self, n_dim: int, degree:int, codim: int, metric: Optional[Callable] = None, tol=DEFAULT_TOLERANCE) -> None:
+        symbols = sympy.symbols(f"x:{n_dim}")
+        constraint_equations = []
+        for i in range(codim):
+            coeffs = np.random.random(n_dim)
+            eq = sympy.Poly(sum([c * x for c, x in zip(coeffs, symbols)]))
+            constraint_equations.append(eq)
+        super().__init__(n_dim, constraint_equations, metric, tol)
 
 
 def _euclidean_metric(n_dim):
