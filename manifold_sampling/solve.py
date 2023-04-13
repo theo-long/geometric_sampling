@@ -36,7 +36,7 @@ def find_line_intersections(
     poly = np.polynomial.Polynomial(line_eq_coeffs[::-1])
     roots = poly.roots()
 
-    sols_mask = (np.real_if_close(roots) == np.real(roots)) & (np.real(roots) >= 0) & (np.real(roots) <= 1)
+    sols_mask = (np.abs(np.imag(roots)) < 1e-14) & (np.real(roots) >= 0) & (np.real(roots) <= 1)
     sols = np.real(roots[sols_mask])
 
     if len(sols) == 0:
