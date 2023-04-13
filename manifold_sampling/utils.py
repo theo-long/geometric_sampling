@@ -1,6 +1,7 @@
 import torch
 import sympy
 import numpy as np
+import scipy
 
 def grad(f):
     """Wrapper that returns a function computing gradient of f."""
@@ -35,3 +36,15 @@ def torus_wrapper(f, r, R):
         Z = r*np.sin(V)
         return f((X, Y, Z))
     return torus_f
+
+def torus_integral(integral_func, r, R):
+    """Integrate function of (x,y,z) coordinates over torus."""
+    torus_f = torus_wrapper(integral_func, r=r, R=R)
+    val, err = scipy.integrate.dblquad(
+        func=lambda u, v: torus_f(u, v) * torus_surface_element(u, v, r, R),
+        a=0,
+        b=2 * np.pi,
+        gfun=0,
+        hfun=2*np.pi
+    )
+    return val, err
