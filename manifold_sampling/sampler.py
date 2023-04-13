@@ -448,8 +448,8 @@ class LinearSubspaceSampler(Sampler):
 
 def _get_sphere_points(n_dim, n_pairs: int, centre: torch.tensor, radius: float):
     gaussian_samples = np.random.multivariate_normal(
-        mean=torch.zeros(n_dim),
-        cov=torch.eye(n_dim),
+        mean=np.zeros(n_dim),
+        cov=np.eye(n_dim),
         size=(n_pairs, 2),
     )
     sphere_samples = gaussian_samples / np.expand_dims(
