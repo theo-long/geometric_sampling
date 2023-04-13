@@ -39,9 +39,9 @@ def plot_ellipsoid(x_factor, y_factor, z_factor, p=None, precision=50):
     U = np.linspace(0, 2*np.pi, precision)
     V = np.linspace(0, np.pi, precision)
     U, V = np.meshgrid(U, V)
-    x = np.cos(U)*np.sin(V) / np.sqrt(x_factor)
-    y = np.sin(U)*np.sin(V) / np.sqrt(y_factor)
-    z = np.cos(V) / np.sqrt(z_factor)
+    x = np.cos(U)*np.sin(V) * x_factor
+    y = np.sin(U)*np.sin(V) * y_factor
+    z = np.cos(V) * z_factor
 
     if p is None:
         color = None
