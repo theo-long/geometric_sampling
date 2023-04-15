@@ -36,8 +36,8 @@ class ConstraintSurface:
     def generate_tangent_space(self, x: torch.Tensor):
         """Generates the tangent space at a point x, given as an orthonormal basis."""
         normal = self.generate_normal_space(x)
-        Q, _ = np.linalg.qr(normal.T)
-        return Q[:, -self.n_dim + self.codim :].T
+        Q, _ = np.linalg.qr(normal.T, mode="complete")
+        return Q[:, -self.n_dim + self.codim:].T
 
     def generate_normal_space(self, x: torch.Tensor):
         """Generates the subspace normal to the tangent space at x, given as an orthonormal basis."""
@@ -51,7 +51,7 @@ class ConstraintSurface:
     def generate_tangent_and_normal_space(self, x: torch.Tensor):
         """Generate subspaces normal and tangent to manifold at x."""
         normal = self.generate_normal_space(x)
-        Q, _ = np.linalg.qr(normal.T)
+        Q, _ = np.linalg.qr(normal.T, mode="complete")
         return Q[:, -self.n_dim + self.codim :].T, normal
 
     def _check_constraint(self, x):
