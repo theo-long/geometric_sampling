@@ -52,6 +52,7 @@ class ManifoldMCMCSampler(Sampler):
         alpha=1.0,
         min_scale=0.1,
         use_jac=True,
+        multiple_sol_every=None,
     ) -> None:
         """An MCMC sampler for constraint manifolds based on Zappa et al. (2017)
 
@@ -64,6 +65,7 @@ class ManifoldMCMCSampler(Sampler):
             alpha (float, optional): alpha parameter for curvature adaptation. Defaults to 1.0.
             min_scale (float, optional): minimum scale parameter for curvature adaptation. Defaults to 0.1.
             use_jac (bool, optional): Whether or not to use gradients for projection steps. Defaults to True.
+            multiple_sol_every (int, optional): Use multiple solution sampling every this many steps. If None do not use.
         """
         self.surface = surface
         self.scale = scale
@@ -100,6 +102,93 @@ class ManifoldMCMCSampler(Sampler):
         self._tangent_space_mean = np.zeros(self.surface.n_dim - self.surface.codim)
         self._normal_space_mean = np.zeros(self.surface.codim)
 
+        self.multiple_sol_every = multiple_sol_every
+        if multiple_sol_every is not None:
+            if self.surface.codim != 1:
+                raise ValueError("Multiple solution sampling only implemented for codimension 1.")
+            self.line_eq_coeffs = generate_line_equation_coefficients(self.surface)
+
+    def _multiple_projection(self, point, normal_space, return_all=False):
+        # Solve for projected point
+        line_eq_coeffs = self.line_eq_coeffs(point, point + normal_space[0])
+        poly = np.polynomial.Polynomial(line_eq_coeffs[::-1])
+        roots = poly.roots()
+        real_roots = np.real(roots[(np.abs(np.imag(roots)) < 1e-14)])
+
+        if len(real_roots) == 0:
+            return None
+
+        # Sort by distance and choose according to weighting
+        real_roots = real_roots[np.argsort(np.abs(real_roots))]
+        p = self.solution_weights[:real_roots.shape[0]]
+        p = p / p.sum()
+
+        if return_all:
+            return real_roots, p
+
+        root = np.random.choice(real_roots, p=p)
+        new_point = point +  root * normal_space[0]
+        w = p[real_roots == root]
+        return new_point, w
+
+    def _reverse_multiple_projection(self, current_point, new_point):
+        # Find v' and p(v') for reverse projection step
+        (
+            new_tangent_space,
+            new_normal_space,
+        ) = self.surface.generate_tangent_and_normal_space(new_point)
+
+        # find v_prime by projecting new_point - current_point onto tangent space
+        dp = current_point - new_point
+        dtangent = new_tangent_space @ dp[:, None]
+
+        v_prime = (dtangent.T @ new_tangent_space).squeeze()
+
+        points, w_primes = self._multiple_projection(new_point + v_prime, new_normal_space)
+        index = (points - new_point).argmin()
+        return v_prime, w_primes[index]
+
+
+    def multiple_solution_step(self, current_point):
+        # Generate orthogonal basis for tangent plane and normal
+        tangent_space, normal_space = self.surface.generate_tangent_and_normal_space(
+            current_point
+        )
+
+        # Sample tangent plane
+        covariance = self.adaptive_scale(current_point)
+        sample = np.random.multivariate_normal(
+            mean=self._tangent_space_mean, cov=covariance, size=1
+        )
+        v = (sample @ tangent_space).squeeze()
+        p_v = stats.multivariate_normal.pdf(
+            sample,  mean=self._tangent_space_mean, cov=covariance
+        )
+
+        new_point, w = self._multiple_projection(current_point + v, normal_space)
+
+        # If projection fails, reject
+        if new_point is None:
+            return current_point, RejectCode.PROJECTION, 0
+
+        inequality_satisfaction = self._check_inequality_constraints(new_point)
+        if not inequality_satisfaction:
+            return current_point, RejectCode.INEQUALITY, 0
+
+        p_v_prime, w_prime = self._reverse_multiple_projection(current_point, new_point)
+
+
+        # Metropolis-Hastings rejection step
+        u = np.random.random()
+        acceptance_prob = (self.density_function(new_point) * p_v_prime * w_prime) / (
+            self.density_function(current_point) * p_v * w
+        )
+        if u > acceptance_prob:
+            return current_point, RejectCode.MH, 0
+
+        return new_point, RejectCode.NONE, 0
+
+    
     def step(self, current_point):
         # Generate orthogonal basis for tangent plane and normal
         tangent_space, normal_space = self.surface.generate_tangent_and_normal_space(
@@ -160,8 +249,13 @@ class ManifoldMCMCSampler(Sampler):
         reject_codes = np.zeros(n_samples + 1)
         reject_codes[0] = RejectCode.NONE
         project_steps = np.zeros(n_samples + 1)
+
+        multiple_sol_every = self.multiple_sol_every if self.multiple_sol_every is not None else n_samples
         for i in trange(n_samples):
-            current_point, reject_code, nfev = self.step(current_point)
+            if i % multiple_sol_every == 0 and i > 0:
+                current_point, reject_code, nfev = self.multiple_solution_step(current_point)
+            else:
+                current_point, reject_code, nfev = self.step(current_point)
             samples[i] = current_point
             reject_codes[i] = reject_code
             project_steps[i] = nfev
@@ -251,7 +345,6 @@ class ManifoldMCMCSampler(Sampler):
 
         return True
 
-
 class ManifoldSphereSampler(Sampler):
     def __init__(
         self,
@@ -283,7 +376,7 @@ class ManifoldSphereSampler(Sampler):
 
         centre = centre.squeeze()
 
-        p1, p2 = _get_sphere_points(self.surface.n_dim, n_samples, centre, radius)
+        p1, p2 = get_sphere_points(self.surface.n_dim, n_samples, centre, radius)
         samples = []
         reject_codes = []
         for i in trange(n_samples):
@@ -380,7 +473,7 @@ class ManifoldSphereMCMCSampler(Sampler):
         current_point = initial_point
         samples = [current_point]
         reject_codes = [RejectCode.NONE]
-        sphere_points = _get_sphere_points(
+        sphere_points = get_sphere_points(
             self.surface.n_dim,
             n_pairs=n_samples,
             centre=np.zeros(self.surface.n_dim),
@@ -446,7 +539,7 @@ class LinearSubspaceSampler(Sampler):
         pass
 
 
-def _get_sphere_points(n_dim, n_pairs: int, centre: torch.tensor, radius: float):
+def get_sphere_points(n_dim, n_pairs: int, centre: torch.tensor, radius: float):
     gaussian_samples = np.random.multivariate_normal(
         mean=np.zeros(n_dim),
         cov=np.eye(n_dim),
