@@ -8,7 +8,7 @@ from geometric_sampling.manifold_sampling.errors import ConstraintError, RejectC
 
 from typing import Optional, Callable, List
 from abc import ABC, abstractmethod
-from multiprocessing import Pool
+from multiprocess import Pool
 from tqdm import trange
 
 import torch
