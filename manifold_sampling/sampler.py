@@ -200,11 +200,11 @@ class ManifoldMCMCSampler(Sampler):
         sample = np.random.multivariate_normal(
             mean=self._tangent_space_mean, cov=covariance, size=1
         )
-        v = (sample @ tangent_space).squeeze()
         p_v = stats.multivariate_normal.pdf(
             sample,  mean=self._tangent_space_mean, cov=covariance
         )
-
+        v = (sample @ tangent_space).squeeze()
+        
         # Solve for projected point
         new_point, nfev = self._project(current_point + v, normal_space)
 
@@ -244,14 +244,14 @@ class ManifoldMCMCSampler(Sampler):
             )
 
         current_point = initial_point
-        samples = np.zeros((n_samples + 1, self.surface.n_dim))
+        samples = np.zeros((n_samples, self.surface.n_dim), dtype=np.float64)
         samples[0] = current_point
-        reject_codes = np.zeros(n_samples + 1)
+        reject_codes = np.zeros(n_samples)
         reject_codes[0] = RejectCode.NONE
-        project_steps = np.zeros(n_samples + 1)
+        project_steps = np.zeros(n_samples)
 
         multiple_sol_every = self.multiple_sol_every if self.multiple_sol_every is not None else n_samples
-        for i in trange(n_samples):
+        for i in trange(1, n_samples):
             if i % multiple_sol_every == 0 and i > 0:
                 current_point, reject_code, nfev = self.multiple_solution_step(current_point)
             else:
@@ -313,9 +313,10 @@ class ManifoldMCMCSampler(Sampler):
             (torch.Tensor, Optional): projected point, or None if not converged after n_iterations
         """
 
-        projection_equation = lambda x: self.surface.constraint_equation(
-            point + x @ normal_space
-        ).squeeze()
+        def projection_equation(x):
+            return self.surface.constraint_equation(
+                point + x @ normal_space
+            ).squeeze()
 
         if self.use_jac:
             projected_jacobian = lambda x: self.surface.jacobian(point + x @ normal_space) @ normal_space.T
