@@ -22,6 +22,7 @@ class ConstraintSurface:
     ) -> None:
         self.n_dim = n_dim
         self.constraint_equation = constraint_equation
+        self.complex = False
         if metric:
             self.metric = metric
         else:
@@ -107,9 +108,11 @@ class AlgebraicSurface(ConstraintSurface):
         constraint_equations: Union[List[sympy.Poly], sympy.Poly],
         args: Optional[Iterable[sympy.Symbol]] = None,
         metric: Optional[Callable] = None,
+        complex: bool = False,
         tol=DEFAULT_TOLERANCE,
     ) -> None:
         self.n_dim = n_dim
+        self.complex = complex
 
         if args is None:
             self.args = symbols(f"x:{n_dim}")
