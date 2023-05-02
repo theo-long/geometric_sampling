@@ -382,14 +382,14 @@ class ManifoldSphereSampler(Sampler):
         for i in trange(n_samples):
             p, q = p1[i], p2[i]
             coeffs = self.line_eq_coeffs(np.concatenate([p, q]))
-            intersection_point = find_line_intersections(coeffs, p, q)
-            if intersection_point is not None:
-                samples.append(intersection_point)
+            intersection_points = find_line_intersections(coeffs, p, q, return_all=True)
+            if intersection_points is not None:
+                samples.append(intersection_points)
                 reject_codes.append(RejectCode.NONE)
             else:
                 reject_codes.append(RejectCode.PROJECTION)
 
-        return np.stack(samples), reject_codes
+        return np.concatenate(samples), reject_codes
 
 
 class ManifoldSphereMCMCSampler(Sampler):
