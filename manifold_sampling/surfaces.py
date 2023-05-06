@@ -1,5 +1,8 @@
 from geometric_sampling.manifold_sampling.errors import ConstraintError
-from geometric_sampling.manifold_sampling.utils import sympy_func_to_array_func, sympy_func_to_jit_func
+from geometric_sampling.manifold_sampling.utils import (
+    sympy_func_to_array_func,
+    sympy_func_to_jit_func,
+)
 from typing import Callable, Optional, List, Union, Iterable
 import torch
 import numpy as np
@@ -39,7 +42,7 @@ class ConstraintSurface:
         """Generates the tangent space at a point x, given as an orthonormal basis."""
         normal = self.generate_normal_space(x)
         Q, _ = np.linalg.qr(normal.T, mode="complete")
-        return Q[:, -self.n_dim + self.codim:].T
+        return Q[:, -self.n_dim + self.codim :].T
 
     def generate_normal_space(self, x: torch.Tensor):
         """Generates the subspace normal to the tangent space at x, given as an orthonormal basis."""
@@ -343,15 +346,23 @@ class OrthogonalGroup(AlgebraicSurface):
         constraint_equations = squared_component_equations + cross_component_equations
 
         super().__init__(
-            n ** 2,
+            n**2,
             constraint_equations,
             sympy.symbols(f"x:{n}:{n}"),
             metric,
             tol,
         )
 
+
 class RandomAlgebraicSurface(AlgebraicSurface):
-    def __init__(self, n_dim: int, degree:int, codim: int, metric: Optional[Callable] = None, tol=DEFAULT_TOLERANCE) -> None:
+    def __init__(
+        self,
+        n_dim: int,
+        degree: int,
+        codim: int,
+        metric: Optional[Callable] = None,
+        tol=DEFAULT_TOLERANCE,
+    ) -> None:
         symbols = sympy.symbols(f"x:{n_dim}")
         constraint_equations = []
         for i in range(codim):
