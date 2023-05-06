@@ -9,6 +9,7 @@ import numpy as np
 import scipy
 import sympy
 from sympy import symbols
+import cyjax
 
 x0, x1, x2 = symbols("x:3")
 
@@ -371,6 +372,19 @@ class RandomAlgebraicSurface(AlgebraicSurface):
             constraint_equations.append(eq)
         super().__init__(n_dim, constraint_equations, metric, tol)
 
+class TrottCurve(AlgebraicSurface):
+    def __init__(self, metric: Optional[Callable] = None, tol=DEFAULT_TOLERANCE):
+        eq = sympy.Poly(144 * (x0 ** 4 + x1 ** 4) - 225 * (x0 ** 2+ x1 ** 2)+ 350 * x0 ** 2 * x1 ** 2 + 81)
+        super().__init__(n_dim=2, constraint_equations=[eq], metric=metric, tol=tol)
+
+class ComplexVariety(AlgebraicSurface):
+    def __init__(self, variety: cyjax.VarietySingle, tol=DEFAULT_TOLERANCE) -> None:
+        poly = variety.defining_poly.affine_poly(0).sympy_poly()
+        re, im = poly.as_expr().as_real_imag()
+        re_im_symbols = sympy.symbols(f"x1:{len(poly.args)} y1:{len(poly.args)}")
+        re, im = sympy.poly(re), sympy.poly(im)
+        re, im = re.subs(zip(re.args[1:], re_im_symbols)), im.subs(zip(im.args[1:], re_im_symbols))
+        super().__init__(n_dim=2 * (len(poly.args) - 1), constraint_equations=[re, im], args=re_im_symbols, tol=tol)
 
 def _euclidean_metric(n_dim):
     return lambda x: np.eye(n_dim)
