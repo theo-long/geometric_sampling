@@ -272,7 +272,7 @@ class TriFold(AlgebraicSurface):
     ) -> None:
         if power % 2 == 0:
             raise ValueError("Power must be odd")
-        constraint_equation = sympy.Poly(x0**power + x1**power + x2**power)
+        constraint_equation = sympy.Poly(x0**power + x1**power + x2**power - 1)
         super().__init__(
             n_dim=3, constraint_equations=constraint_equation, metric=metric, tol=tol
         )
