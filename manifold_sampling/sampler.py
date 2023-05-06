@@ -2,7 +2,7 @@ from geometric_sampling.manifold_sampling.surfaces import (
     ConstraintSurface,
     AlgebraicSurface,
 )
-from geometric_sampling.manifold_sampling.utils import grad, sympy_func_to_array_func
+from geometric_sampling.manifold_sampling.utils import grad, sympy_func_to_array_func, change_affine_coordinates
 from geometric_sampling.manifold_sampling.solve import generate_line_equation_coefficients, find_line_intersections, t, newton_solver, hybrid_solver
 from geometric_sampling.manifold_sampling.errors import ConstraintError, RejectCode
 
@@ -277,6 +277,10 @@ class ManifoldMCMCSampler(Sampler):
                 current_point, reject_code, nfev = self.multiple_solution_step(current_point)
             else:
                 current_point, reject_code, nfev = self.step(current_point)
+
+            if self.affine_coordinates:
+                current_point = change_affine_coordinates(current_point)
+
             samples[i] = current_point
             reject_codes[i] = reject_code
             project_steps[i] = nfev

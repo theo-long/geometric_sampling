@@ -65,3 +65,19 @@ def torus_integral(integral_func, r, R):
 @njit
 def jitted_norm(x) :
     return np.linalg.norm(x)
+
+def change_affine_coordinates(current_point):
+    z_coords = current_point[:current_point.shape[-1]//2] * 1.j + current_point[current_point.shape[-1]//2:]
+    z_norms = np.abs(z_coords)
+    if z_norms.max() <= 1:
+        return current_point
+
+    new_coords = _change_affine_z_coordinates(z_coords, z_norms)
+    return np.concatenate([new_coords.imag, new_coords.real], axis=-1)
+
+@njit
+def _change_affine_z_coordinates(z_coords, z_norms):
+    new_patch = z_norms.argmax()
+    new_coords = z_coords / z_coords[new_patch]
+    new_coords[new_patch] = 1 / z_coords[new_patch]
+    return new_coords
