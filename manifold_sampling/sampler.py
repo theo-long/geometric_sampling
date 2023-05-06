@@ -217,15 +217,15 @@ class ManifoldMCMCSampler(Sampler):
         )
         v = (sample @ tangent_space).squeeze()
         # Solve for projected point
-        new_point, nfev = self._project(current_point + v, normal_space)
+        new_point, nfev, njev = self._project(current_point + v, normal_space)
 
         # If projection fails, reject
         if new_point is None:
-            return current_point, RejectCode.PROJECTION, nfev
+            return current_point, RejectCode.PROJECTION, nfev, njev
 
         inequality_satisfaction = self._check_inequality_constraints(new_point)
         if not inequality_satisfaction:
-            return current_point, RejectCode.INEQUALITY, nfev
+            return current_point, RejectCode.INEQUALITY, nfev, njev
 
         # Generate normal and tangent space for new point
         (
@@ -254,15 +254,15 @@ class ManifoldMCMCSampler(Sampler):
         # detJ_ratio = (normal_space @ normal_space.T) / (new_normal_space @ new_normal_space.T)
         acceptance_prob = prob_ratio
         if u > acceptance_prob:
-            return current_point, RejectCode.MH, nfev
+            return current_point, RejectCode.MH, nfev, njev
 
         # reverse projection step
         if not self._reverse_projection(
             current_point, new_point, new_normal_space, v_prime
         ):
-            return current_point, RejectCode.REVERSE_PROJECTION, nfev
+            return current_point, RejectCode.REVERSE_PROJECTION, nfev, njev
 
-        return new_point, RejectCode.NONE, nfev
+        return new_point, RejectCode.NONE, nfev, njev
 
     def sample(self, n_samples, initial_point=None, verbose=True):
         if initial_point is None:
@@ -279,7 +279,7 @@ class ManifoldMCMCSampler(Sampler):
         samples[0] = current_point
         reject_codes = np.zeros(n_samples)
         reject_codes[0] = RejectCode.NONE
-        project_steps = np.zeros(n_samples)
+        project_steps = np.zeros((n_samples, 2))
 
         multiple_sol_every = (
             self.multiple_sol_every
@@ -293,14 +293,15 @@ class ManifoldMCMCSampler(Sampler):
                     current_point
                 )
             else:
-                current_point, reject_code, nfev = self.step(current_point)
+                current_point, reject_code, nfev, njev = self.step(current_point)
 
             if self.affine_coordinates:
                 current_point = change_affine_coordinates(current_point)
 
             samples[i] = current_point
             reject_codes[i] = reject_code
-            project_steps[i] = nfev
+            project_steps[i][0] = nfev
+            project_steps[i][1] = njev
 
         return np.stack(samples), reject_codes, project_steps
 
@@ -325,7 +326,7 @@ class ManifoldMCMCSampler(Sampler):
         """
 
         # check Newton solver converges to reverse point
-        reverse_point, _ = self._project(new_point + v_prime, new_normal_space)
+        reverse_point, _, _ = self._project(new_point + v_prime, new_normal_space)
         if reverse_point is None:
             return False
         if not np.allclose(current_point, reverse_point, atol=self.surface.tol):
@@ -359,14 +360,14 @@ class ManifoldMCMCSampler(Sampler):
             projected_jacobian = None
 
         if self.projection_solver == "newton":
-            root, nfev = newton_solver(
+            root, nfev, njev = newton_solver(
                 projection_equation,
                 projected_jacobian,
                 self._normal_space_mean,
                 eps=1.49012e-08,
             )
         else:
-            root, nfev = scipy_solver(
+            root, nfev, njev = scipy_solver(
                 projection_equation,
                 projected_jacobian,
                 self._normal_space_mean,
@@ -379,7 +380,7 @@ class ManifoldMCMCSampler(Sampler):
         else:
             projection = point + root @ normal_space
 
-        return projection, nfev
+        return projection, nfev, njev
 
     def _check_inequality_constraints(self, point: torch.Tensor):
         for constraint in self.inequality_constraints:

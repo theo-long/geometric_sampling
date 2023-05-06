@@ -82,7 +82,7 @@ def newton_solver(F, J, x, eps):
     # Here, either a solution is found, or too many iterations
     if F_norm > eps:
         x = None
-    return x, iteration_counter
+    return x, iteration_counter, iteration_counter
 
 
 def scipy_solver(F, J, x, eps, method="hybr"):
@@ -97,7 +97,10 @@ def scipy_solver(F, J, x, eps, method="hybr"):
         jac=J,
     )
 
+    if J is None:
+        result.njev = 0
+
     if result.success:
-        return result.x, result.nfev
+        return result.x, result.nfev, result.njev
     else:
-        return None, result.nfev
+        return None, result.nfev, result.njev
