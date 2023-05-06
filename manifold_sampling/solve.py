@@ -81,7 +81,7 @@ def newton_solver(F, J, x, eps):
 
     # Here, either a solution is found, or too many iterations
     if F_norm > eps:
-        x = None
+        x = np.NaN
     return x, iteration_counter, iteration_counter
 
 
@@ -103,4 +103,4 @@ def scipy_solver(F, J, x, eps, method="hybr"):
     if result.success:
         return result.x, result.nfev, result.njev
     else:
-        return None, result.nfev, result.njev
+        return np.NaN, result.nfev, result.njev

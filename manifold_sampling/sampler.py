@@ -18,6 +18,7 @@ from geometric_sampling.manifold_sampling.errors import ConstraintError, RejectC
 
 from typing import Optional, Callable, List
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from multiprocess import Pool
 from tqdm import trange
 
@@ -33,6 +34,13 @@ log = getLogger()
 SPHERE_SOLVER_MAX_ITER = 250
 DEFAULT_INTERPOLATING_PRECISION = 1e-4
 
+@dataclass
+class StepInfo:
+    nfev: int
+    njev: int
+    root: np.ndarray
+    v: np.ndarray
+    reject_code: RejectCode = RejectCode.NONE
 
 class Sampler(ABC):
     @abstractmethod
@@ -202,6 +210,7 @@ class ManifoldMCMCSampler(Sampler):
         return new_point, RejectCode.NONE, 0
 
     def step(self, current_point):
+
         # Generate orthogonal basis for tangent plane and normal
         tangent_space, normal_space = self.surface.generate_tangent_and_normal_space(
             current_point
@@ -217,15 +226,18 @@ class ManifoldMCMCSampler(Sampler):
         )
         v = (sample @ tangent_space).squeeze()
         # Solve for projected point
-        new_point, nfev, njev = self._project(current_point + v, normal_space)
+        new_point, nfev, njev, root = self._project(current_point + v, normal_space)
+        step_info = StepInfo(nfev, njev, root, sample)
 
         # If projection fails, reject
         if new_point is None:
-            return current_point, RejectCode.PROJECTION, nfev, njev
+            step_info.reject_code = RejectCode.PROJECTION
+            return current_point, step_info
 
         inequality_satisfaction = self._check_inequality_constraints(new_point)
         if not inequality_satisfaction:
-            return current_point, RejectCode.INEQUALITY, nfev, njev
+            step_info.reject_code = RejectCode.INEQUALITY
+            return current_point, step_info
 
         # Generate normal and tangent space for new point
         (
@@ -254,17 +266,19 @@ class ManifoldMCMCSampler(Sampler):
         # detJ_ratio = (normal_space @ normal_space.T) / (new_normal_space @ new_normal_space.T)
         acceptance_prob = prob_ratio
         if u > acceptance_prob:
-            return current_point, RejectCode.MH, nfev, njev
+            step_info.reject_code = RejectCode.MH
+            return current_point, step_info
 
         # reverse projection step
         if not self._reverse_projection(
             current_point, new_point, new_normal_space, v_prime
         ):
-            return current_point, RejectCode.REVERSE_PROJECTION, nfev, njev
+            step_info.reject_code = RejectCode.REVERSE_PROJECTION
+            return current_point, step_info
 
-        return new_point, RejectCode.NONE, nfev, njev
+        return new_point, step_info
 
-    def sample(self, n_samples, initial_point=None, verbose=True):
+    def sample(self, n_samples, initial_point=None, verbose=True, log_info=False):
         if initial_point is None:
             initial_point = self._get_initial_point()
 
@@ -279,7 +293,21 @@ class ManifoldMCMCSampler(Sampler):
         samples[0] = current_point
         reject_codes = np.zeros(n_samples)
         reject_codes[0] = RejectCode.NONE
-        project_steps = np.zeros((n_samples, 2))
+
+        if log_info:
+            nfev = np.zeros(n_samples)
+            njev = np.zeros(n_samples)
+            roots = np.zeros((n_samples, self.surface.codim))
+            proposals = np.zeros((n_samples, self.surface.n_dim - self.surface.codim))
+            info = {
+                "nfev":nfev,
+                "njev":njev,
+                "roots":roots,
+                "proposals":proposals,
+            }
+        else:
+            info = {}
+
 
         multiple_sol_every = (
             self.multiple_sol_every
@@ -293,17 +321,22 @@ class ManifoldMCMCSampler(Sampler):
                     current_point
                 )
             else:
-                current_point, reject_code, nfev, njev = self.step(current_point)
+                current_point, step_info = self.step(current_point)
 
             if self.affine_coordinates:
                 current_point = change_affine_coordinates(current_point)
 
             samples[i] = current_point
-            reject_codes[i] = reject_code
-            project_steps[i][0] = nfev
-            project_steps[i][1] = njev
+            reject_codes[i] = step_info.reject_code
+        
+            if log_info:
+                nfev[i] = step_info.nfev
+                njev[i] = step_info.njev
+                roots[i] = step_info.root
+                proposals[i] = step_info.v
 
-        return np.stack(samples), reject_codes, project_steps
+
+        return samples, reject_codes, info
 
     def _get_initial_point(self):
         raise NotImplementedError()
@@ -326,7 +359,7 @@ class ManifoldMCMCSampler(Sampler):
         """
 
         # check Newton solver converges to reverse point
-        reverse_point, _, _ = self._project(new_point + v_prime, new_normal_space)
+        reverse_point, _, _, _ = self._project(new_point + v_prime, new_normal_space)
         if reverse_point is None:
             return False
         if not np.allclose(current_point, reverse_point, atol=self.surface.tol):
@@ -343,7 +376,7 @@ class ManifoldMCMCSampler(Sampler):
             n_iterations (int, optional): max number of iterations for Newton's method. Defaults to 50.
 
         Returns:
-            (torch.Tensor, Optional): projected point, or None if not converged after n_iterations
+            projection, nfev, njev, root
         """
 
         def projection_equation(x):
@@ -375,12 +408,12 @@ class ManifoldMCMCSampler(Sampler):
                 method=self.projection_solver,
             )
 
-        if root is None:
+        if root is np.NaN:
             projection = None
         else:
             projection = point + root @ normal_space
 
-        return projection, nfev, njev
+        return projection, nfev, njev, root
 
     def _check_inequality_constraints(self, point: torch.Tensor):
         for constraint in self.inequality_constraints:
