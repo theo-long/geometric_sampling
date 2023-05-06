@@ -264,7 +264,7 @@ class ManifoldMCMCSampler(Sampler):
 
         return new_point, RejectCode.NONE, nfev
 
-    def sample(self, n_samples, initial_point=None):
+    def sample(self, n_samples, initial_point=None, verbose=True):
         if initial_point is None:
             initial_point = self._get_initial_point()
 
@@ -286,7 +286,8 @@ class ManifoldMCMCSampler(Sampler):
             if self.multiple_sol_every is not None
             else n_samples
         )
-        for i in trange(1, n_samples):
+        iterable = trange(1, n_samples) if verbose else range(1, n_samples)
+        for i in iterable:
             if i % multiple_sol_every == 0 and i > 0:
                 current_point, reject_code, nfev = self.multiple_solution_step(
                     current_point
