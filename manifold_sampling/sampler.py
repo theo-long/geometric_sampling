@@ -2,8 +2,18 @@ from geometric_sampling.manifold_sampling.surfaces import (
     ConstraintSurface,
     AlgebraicSurface,
 )
-from geometric_sampling.manifold_sampling.utils import grad, sympy_func_to_array_func, change_affine_coordinates
-from geometric_sampling.manifold_sampling.solve import generate_line_equation_coefficients, find_line_intersections, t, newton_solver, scipy_solver
+from geometric_sampling.manifold_sampling.utils import (
+    grad,
+    sympy_func_to_array_func,
+    change_affine_coordinates,
+)
+from geometric_sampling.manifold_sampling.solve import (
+    generate_line_equation_coefficients,
+    find_line_intersections,
+    t,
+    newton_solver,
+    scipy_solver,
+)
 from geometric_sampling.manifold_sampling.errors import ConstraintError, RejectCode
 
 from typing import Optional, Callable, List
@@ -22,6 +32,7 @@ log = getLogger()
 
 SPHERE_SOLVER_MAX_ITER = 250
 DEFAULT_INTERPOLATING_PRECISION = 1e-4
+
 
 class Sampler(ABC):
     @abstractmethod
@@ -85,17 +96,13 @@ class ManifoldMCMCSampler(Sampler):
             self.density_function = lambda *args: 1.0
 
         cov_matrix = np.eye(self.surface.n_dim - self.surface.codim) * self.scale
-        if curvature_adaptive_scale is None:          
+        if curvature_adaptive_scale is None:
             self.adaptive_scale = lambda point: cov_matrix
         elif curvature_adaptive_scale == "mean_curvature":
-            self.adaptive_scale = (
-                lambda point:
-                (
-                    cov_matrix
-                    * min_scale
-                    + (1 - min_scale)
-                    * np.exp(-1 * (self.surface.mean_curvature(point) / alpha) ** 2)
-                )
+            self.adaptive_scale = lambda point: (
+                cov_matrix * min_scale
+                + (1 - min_scale)
+                * np.exp(-1 * (self.surface.mean_curvature(point) / alpha) ** 2)
             )
         else:
             raise ValueError(
@@ -109,7 +116,9 @@ class ManifoldMCMCSampler(Sampler):
         self.multiple_sol_every = multiple_sol_every
         if multiple_sol_every is not None:
             if self.surface.codim != 1:
-                raise ValueError("Multiple solution sampling only implemented for codimension 1.")
+                raise ValueError(
+                    "Multiple solution sampling only implemented for codimension 1."
+                )
             self.line_eq_coeffs = generate_line_equation_coefficients(self.surface)
 
     def _multiple_projection(self, point, normal_space, return_all=False):
@@ -124,14 +133,14 @@ class ManifoldMCMCSampler(Sampler):
 
         # Sort by distance and choose according to weighting
         real_roots = real_roots[np.argsort(np.abs(real_roots))]
-        p = self.solution_weights[:real_roots.shape[0]]
+        p = self.solution_weights[: real_roots.shape[0]]
         p = p / p.sum()
 
         if return_all:
             return real_roots, p
 
         root = np.random.choice(real_roots, p=p)
-        new_point = point +  root * normal_space[0]
+        new_point = point + root * normal_space[0]
         w = p[real_roots == root]
         return new_point, w
 
@@ -148,10 +157,11 @@ class ManifoldMCMCSampler(Sampler):
 
         v_prime = (dtangent.T @ new_tangent_space).squeeze()
 
-        points, w_primes = self._multiple_projection(new_point + v_prime, new_normal_space)
+        points, w_primes = self._multiple_projection(
+            new_point + v_prime, new_normal_space
+        )
         index = (points - new_point).argmin()
         return v_prime, w_primes[index]
-
 
     def multiple_solution_step(self, current_point):
         # Generate orthogonal basis for tangent plane and normal
@@ -166,7 +176,7 @@ class ManifoldMCMCSampler(Sampler):
         )
         v = (sample @ tangent_space).squeeze()
         p_v = stats.multivariate_normal.pdf(
-            sample,  mean=self._tangent_space_mean, cov=covariance
+            sample, mean=self._tangent_space_mean, cov=covariance
         )
 
         new_point, w = self._multiple_projection(current_point + v, normal_space)
@@ -181,7 +191,6 @@ class ManifoldMCMCSampler(Sampler):
 
         p_v_prime, w_prime = self._reverse_multiple_projection(current_point, new_point)
 
-
         # Metropolis-Hastings rejection step
         u = np.random.random()
         acceptance_prob = (self.density_function(new_point) * p_v_prime * w_prime) / (
@@ -192,7 +201,6 @@ class ManifoldMCMCSampler(Sampler):
 
         return new_point, RejectCode.NONE, 0
 
-    
     def step(self, current_point):
         # Generate orthogonal basis for tangent plane and normal
         tangent_space, normal_space = self.surface.generate_tangent_and_normal_space(
@@ -205,7 +213,7 @@ class ManifoldMCMCSampler(Sampler):
             mean=self._tangent_space_mean, cov=covariance, size=1
         )
         p_v = stats.multivariate_normal.pdf(
-            sample,  mean=self._tangent_space_mean, cov=covariance
+            sample, mean=self._tangent_space_mean, cov=covariance
         )
         v = (sample @ tangent_space).squeeze()
         # Solve for projected point
@@ -243,13 +251,15 @@ class ManifoldMCMCSampler(Sampler):
         prob_ratio = (self.density_function(new_point) * p_v_prime) / (
             self.density_function(current_point) * p_v
         )
-        #detJ_ratio = (normal_space @ normal_space.T) / (new_normal_space @ new_normal_space.T)
+        # detJ_ratio = (normal_space @ normal_space.T) / (new_normal_space @ new_normal_space.T)
         acceptance_prob = prob_ratio
         if u > acceptance_prob:
             return current_point, RejectCode.MH, nfev
 
         # reverse projection step
-        if not self._reverse_projection(current_point, new_point, new_normal_space, v_prime):
+        if not self._reverse_projection(
+            current_point, new_point, new_normal_space, v_prime
+        ):
             return current_point, RejectCode.REVERSE_PROJECTION, nfev
 
         return new_point, RejectCode.NONE, nfev
@@ -271,10 +281,16 @@ class ManifoldMCMCSampler(Sampler):
         reject_codes[0] = RejectCode.NONE
         project_steps = np.zeros(n_samples)
 
-        multiple_sol_every = self.multiple_sol_every if self.multiple_sol_every is not None else n_samples
+        multiple_sol_every = (
+            self.multiple_sol_every
+            if self.multiple_sol_every is not None
+            else n_samples
+        )
         for i in trange(1, n_samples):
             if i % multiple_sol_every == 0 and i > 0:
-                current_point, reject_code, nfev = self.multiple_solution_step(current_point)
+                current_point, reject_code, nfev = self.multiple_solution_step(
+                    current_point
+                )
             else:
                 current_point, reject_code, nfev = self.step(current_point)
 
@@ -290,7 +306,13 @@ class ManifoldMCMCSampler(Sampler):
     def _get_initial_point(self):
         raise NotImplementedError()
 
-    def _reverse_projection(self, current_point: np.ndarray, new_point: np.ndarray, new_normal_space: np.ndarray, v_prime: np.ndarray):
+    def _reverse_projection(
+        self,
+        current_point: np.ndarray,
+        new_point: np.ndarray,
+        new_normal_space: np.ndarray,
+        v_prime: np.ndarray,
+    ):
         """Check if reverse projection new_point -> current_point is possible and is solved by Newton.
         Returns v_prime reverse tangent vector and p_v_prime, probability of selecting that vector
 
@@ -328,15 +350,29 @@ class ManifoldMCMCSampler(Sampler):
             ).squeeze(1)
 
         if self.use_jac:
-            projected_jacobian = lambda x: self.surface.jitted_jacobian(point + x @ normal_space) @ normal_space.T
+            projected_jacobian = (
+                lambda x: self.surface.jitted_jacobian(point + x @ normal_space)
+                @ normal_space.T
+            )
         else:
             projected_jacobian = None
 
         if self.projection_solver == "newton":
-            root, nfev = newton_solver(projection_equation, projected_jacobian, self._normal_space_mean, eps=1.49012e-08)
+            root, nfev = newton_solver(
+                projection_equation,
+                projected_jacobian,
+                self._normal_space_mean,
+                eps=1.49012e-08,
+            )
         else:
-            root, nfev = scipy_solver(projection_equation, projected_jacobian, self._normal_space_mean, eps=1.49012e-08, method=self.projection_solver)
-            
+            root, nfev = scipy_solver(
+                projection_equation,
+                projected_jacobian,
+                self._normal_space_mean,
+                eps=1.49012e-08,
+                method=self.projection_solver,
+            )
+
         if root is None:
             projection = None
         else:
@@ -350,6 +386,7 @@ class ManifoldMCMCSampler(Sampler):
                 return False
 
         return True
+
 
 class ManifoldSphereSampler(Sampler):
     def __init__(
