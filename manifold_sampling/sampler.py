@@ -3,7 +3,7 @@ from geometric_sampling.manifold_sampling.surfaces import (
     AlgebraicSurface,
 )
 from geometric_sampling.manifold_sampling.utils import grad, sympy_func_to_array_func
-from geometric_sampling.manifold_sampling.solve import generate_line_equation_coefficients, find_line_intersections, t
+from geometric_sampling.manifold_sampling.solve import generate_line_equation_coefficients, find_line_intersections, t, newton_solver, hybrid_solver
 from geometric_sampling.manifold_sampling.errors import ConstraintError, RejectCode
 
 from typing import Optional, Callable, List
@@ -20,7 +20,6 @@ from logging import getLogger
 
 log = getLogger()
 
-NEWTON_MAX_ITER = 50
 SPHERE_SOLVER_MAX_ITER = 250
 DEFAULT_INTERPOLATING_PRECISION = 1e-4
 
@@ -53,6 +52,8 @@ class ManifoldMCMCSampler(Sampler):
         min_scale=0.1,
         use_jac=True,
         multiple_sol_every=None,
+        projection_solver="newton",
+        affine_coordinates=False,
     ) -> None:
         """An MCMC sampler for constraint manifolds based on Zappa et al. (2017)
 
@@ -66,10 +67,13 @@ class ManifoldMCMCSampler(Sampler):
             min_scale (float, optional): minimum scale parameter for curvature adaptation. Defaults to 0.1.
             use_jac (bool, optional): Whether or not to use gradients for projection steps. Defaults to True.
             multiple_sol_every (int, optional): Use multiple solution sampling every this many steps. If None do not use.
+            projection_solver (str): Which solver to use for projection step. Can be "newton" or "hybr" for scipy powell hybrid. Default is "newton"
         """
         self.surface = surface
         self.scale = scale
         self.use_jac = use_jac
+        self.projection_solver = projection_solver
+        self.affine_coordinates = affine_coordinates
         if inequality_constraints:
             self.inequality_constraints = inequality_constraints
         else:
@@ -204,7 +208,6 @@ class ManifoldMCMCSampler(Sampler):
             sample,  mean=self._tangent_space_mean, cov=covariance
         )
         v = (sample @ tangent_space).squeeze()
-        
         # Solve for projected point
         new_point, nfev = self._project(current_point + v, normal_space)
 
@@ -216,20 +219,38 @@ class ManifoldMCMCSampler(Sampler):
         if not inequality_satisfaction:
             return current_point, RejectCode.INEQUALITY, nfev
 
-        # Find v' and p(v') for reverse projection step
-        v_prime, p_v_prime = self._reverse_projection(current_point, new_point)
+        # Generate normal and tangent space for new point
+        (
+            new_tangent_space,
+            new_normal_space,
+        ) = self.surface.generate_tangent_and_normal_space(new_point)
 
-        # Check reverse projection works
-        if v_prime is None:
-            return current_point, RejectCode.REVERSE_PROJECTION, nfev
+        # find v_prime by projecting new_point - current_point onto tangent space
+        dp = current_point - new_point
+        dtangent = new_tangent_space @ dp[:, None]
+        v_prime = (dtangent.T @ new_tangent_space).squeeze()
+
+        # calculate probability of new point -> current transition
+        covariance = self.adaptive_scale(new_point)
+        p_v_prime = stats.multivariate_normal.pdf(
+            dtangent.squeeze(),
+            mean=self._tangent_space_mean,
+            cov=covariance,
+        )
 
         # Metropolis-Hastings rejection step
         u = np.random.random()
-        acceptance_prob = (self.density_function(new_point) * p_v_prime) / (
+        prob_ratio = (self.density_function(new_point) * p_v_prime) / (
             self.density_function(current_point) * p_v
         )
+        #detJ_ratio = (normal_space @ normal_space.T) / (new_normal_space @ new_normal_space.T)
+        acceptance_prob = prob_ratio
         if u > acceptance_prob:
             return current_point, RejectCode.MH, nfev
+
+        # reverse projection step
+        if not self._reverse_projection(current_point, new_point, new_normal_space, v_prime):
+            return current_point, RejectCode.REVERSE_PROJECTION, nfev
 
         return new_point, RejectCode.NONE, nfev
 
@@ -265,41 +286,25 @@ class ManifoldMCMCSampler(Sampler):
     def _get_initial_point(self):
         raise NotImplementedError()
 
-    def _reverse_projection(self, current_point: torch.Tensor, new_point: torch.Tensor):
+    def _reverse_projection(self, current_point: np.ndarray, new_point: np.ndarray, new_normal_space: np.ndarray, v_prime: np.ndarray):
         """Check if reverse projection new_point -> current_point is possible and is solved by Newton.
         Returns v_prime reverse tangent vector and p_v_prime, probability of selecting that vector
 
         Args:
-            current_point (torch.Tensor): starting point of mcmc step
-            new_point (torch.Tensor): new point found after projection step
+            current_point (np.ndarray): starting point of mcmc step
+            new_point (np.ndarray): new point found after projection step
+            new_normal_space (np.ndarray)
+            v_prime (np.ndarray)
         """
-        # Generate normal and tangent space for new point
-        (
-            new_tangent_space,
-            new_normal_space,
-        ) = self.surface.generate_tangent_and_normal_space(new_point)
-
-        # find v_prime by projecting new_point - current_point onto tangent space
-        dp = current_point - new_point
-        dtangent = new_tangent_space @ dp[:, None]
-
-        v_prime = (dtangent.T @ new_tangent_space).squeeze()
 
         # check Newton solver converges to reverse point
         reverse_point, _ = self._project(new_point + v_prime, new_normal_space)
         if reverse_point is None:
-            return None, None
+            return False
         if not np.allclose(current_point, reverse_point, atol=self.surface.tol):
-            return None, None
+            return False
 
-        covariance = self.adaptive_scale(new_point)
-        p_v_prime = stats.multivariate_normal.pdf(
-            dtangent.squeeze(),
-            mean=self._tangent_space_mean,
-            cov=covariance,
-        )
-
-        return v_prime, p_v_prime
+        return True
 
     def _project(self, point: torch.Tensor, normal_space: torch.Tensor):
         """Compute projection of point to surface along normal using Newton's method.
@@ -314,30 +319,26 @@ class ManifoldMCMCSampler(Sampler):
         """
 
         def projection_equation(x):
-            return self.surface.constraint_equation(
+            return self.surface.jitted_constraint_equation(
                 point + x @ normal_space
-            ).squeeze()
+            ).squeeze(1)
 
         if self.use_jac:
-            projected_jacobian = lambda x: self.surface.jacobian(point + x @ normal_space) @ normal_space.T
+            projected_jacobian = lambda x: self.surface.jitted_jacobian(point + x @ normal_space) @ normal_space.T
         else:
             projected_jacobian = None
 
-        result = optimize.root(
-            projection_equation,
-            self._normal_space_mean,
-            method="hybr",
-            options=dict(
-                maxfev=NEWTON_MAX_ITER,
-            ),
-            jac=projected_jacobian,
-        )
-        if result.success:
-            projection = point + result.x @ normal_space
+        if self.projection_solver == "newton":
+            root, nfev = newton_solver(projection_equation, projected_jacobian, self._normal_space_mean, eps=1.49012e-08)
         else:
+            root, nfev = hybrid_solver(projection_equation, projected_jacobian, self._normal_space_mean, eps=1.49012e-08)
+            
+        if root is None:
             projection = None
+        else:
+            projection = point + root @ normal_space
 
-        return projection, result.nfev
+        return projection, nfev
 
     def _check_inequality_constraints(self, point: torch.Tensor):
         for constraint in self.inequality_constraints:
@@ -418,12 +419,12 @@ class ManifoldSphereMCMCSampler(Sampler):
 
         if curvature_adaptive_scale is None:
             self.adaptive_scale = (
-                lambda point: np.linalg.inv(self.surface.metric(point)) * self.scale ** 2
+                lambda point: np.linalg.inv(self.surface.metric(point)) * self.scale
             )
         elif curvature_adaptive_scale == "mean_curvature":
             self.adaptive_scale = (
                 lambda point: np.linalg.inv(self.surface.metric(point))
-                * self.scale ** 2
+                * self.scale
                 * (
                     min_scale
                     + (1 - min_scale)
