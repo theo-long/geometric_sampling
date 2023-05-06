@@ -3,7 +3,7 @@ from geometric_sampling.manifold_sampling.surfaces import (
     AlgebraicSurface,
 )
 from geometric_sampling.manifold_sampling.utils import grad, sympy_func_to_array_func, change_affine_coordinates
-from geometric_sampling.manifold_sampling.solve import generate_line_equation_coefficients, find_line_intersections, t, newton_solver, hybrid_solver
+from geometric_sampling.manifold_sampling.solve import generate_line_equation_coefficients, find_line_intersections, t, newton_solver, scipy_solver
 from geometric_sampling.manifold_sampling.errors import ConstraintError, RejectCode
 
 from typing import Optional, Callable, List
@@ -335,7 +335,7 @@ class ManifoldMCMCSampler(Sampler):
         if self.projection_solver == "newton":
             root, nfev = newton_solver(projection_equation, projected_jacobian, self._normal_space_mean, eps=1.49012e-08)
         else:
-            root, nfev = hybrid_solver(projection_equation, projected_jacobian, self._normal_space_mean, eps=1.49012e-08)
+            root, nfev = scipy_solver(projection_equation, projected_jacobian, self._normal_space_mean, eps=1.49012e-08, method=self.projection_solver)
             
         if root is None:
             projection = None

@@ -78,13 +78,14 @@ def newton_solver(F, J, x, eps):
         x = None
     return x, iteration_counter
 
-def hybrid_solver(F, J, x, eps):
+def scipy_solver(F, J, x, eps, method="hybr"):
     result = optimize.root(
         F,
         x,
-        method="hybr",
+        method=method,
         options=dict(
             maxfev=NEWTON_MAX_ITER,
+            maxiter=NEWTON_MAX_ITER,
         ),
         jac=J,
     )
