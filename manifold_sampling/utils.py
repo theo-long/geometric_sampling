@@ -2,6 +2,7 @@ import torch
 import sympy
 import numpy as np
 import scipy
+from numba import njit, float64
 
 def grad(f):
     """Wrapper that returns a function computing gradient of f."""
@@ -23,6 +24,18 @@ def sympy_func_to_array_func(args, expr: sympy.Expr):
     def array_f(a):
         return f(*a) # We assume rows correspond to different args
     return array_f
+
+def sympy_func_to_jit_func(args, expr: sympy.Expr):
+    """Turn a sympy expression into a jitted numba function.
+
+    Args:
+        args: arguments (usually a list of sympy symbols)
+        expr (sympy.Expr): sympy expression
+    """
+    f = njit(sympy.lambdify(args, expr, modules=["scipy", "numpy"], cse=True))
+    def unpacked_f(a):
+        return f(*a) # We assume rows correspond to different args
+    return unpacked_f
 
 def torus_surface_element(U, V, r, R):
     """Surface element for integrating 3d torus in U,V plane"""
@@ -48,3 +61,7 @@ def torus_integral(integral_func, r, R):
         hfun=2*np.pi
     )
     return val, err
+
+@njit
+def jitted_norm(x) :
+    return np.linalg.norm(x)

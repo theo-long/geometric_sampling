@@ -1,5 +1,5 @@
 from geometric_sampling.manifold_sampling.errors import ConstraintError
-from geometric_sampling.manifold_sampling.utils import sympy_func_to_array_func
+from geometric_sampling.manifold_sampling.utils import sympy_func_to_array_func, sympy_func_to_jit_func
 from typing import Callable, Optional, List, Union, Iterable
 import torch
 import numpy as np
@@ -22,6 +22,7 @@ class ConstraintSurface:
     ) -> None:
         self.n_dim = n_dim
         self.constraint_equation = constraint_equation
+        self.jitted_constraint_equation = constraint_equations
         self.complex = False
         if metric:
             self.metric = metric
@@ -59,7 +60,7 @@ class ConstraintSurface:
         constraint_value = self.constraint_equation(x)
         if isinstance(constraint_value, torch.Tensor):
             constraint_value = constraint_value.detach()
-        if not np.allclose(constraint_value, 0, self.tol):
+        if not np.allclose(constraint_value, 0, atol=self.tol):
             raise ConstraintError(
                 f"Point does not satisfy constraint equation with tolerance {self.tol:.2E}"
             )
@@ -130,6 +131,9 @@ class AlgebraicSurface(ConstraintSurface):
         self.constraint_equation = sympy_func_to_array_func(
             self.args, sympy.Matrix(constraint_equations)
         )
+        self.jitted_constraint_equation = sympy_func_to_jit_func(
+            self.args, sympy.Matrix(constraint_equations)
+        )
         self.algebraic_equation = sympy.Matrix(constraint_equations)
         if metric:
             self.metric = metric
@@ -140,7 +144,7 @@ class AlgebraicSurface(ConstraintSurface):
     def generate_normal_space(self, x: torch.Tensor):
         """Generates the subspace normal to the tangent space at x, given as an orthonormal basis."""
         jac = self.jacobian(x)
-        return jac / np.linalg.norm(jac, axis=1)[:, None]
+        return jac
 
     def n_intersections(self, p1: torch.Tensor, p2: torch.Tensor):
         """Find number of intersection points on line between p1 and p2
@@ -157,6 +161,15 @@ class AlgebraicSurface(ConstraintSurface):
             jacobian = symbolic_jacobian(self.algebraic_equation, self.args)
             self._jacobian_func = sympy_func_to_array_func(self.args, jacobian)
             return self._jacobian_func(p)
+        else:
+            return jacobian_func(p)
+
+    def jitted_jacobian(self, p: np.array):
+        jacobian_func = getattr(self, "_jitted_jacobian_func", None)
+        if jacobian_func is None:
+            jacobian = symbolic_jacobian(self.algebraic_equation, self.args)
+            self._jitted_jacobian_func = sympy_func_to_jit_func(self.args, jacobian)
+            return self._jitted_jacobian_func(p)
         else:
             return jacobian_func(p)
 
