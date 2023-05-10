@@ -6,7 +6,7 @@ from geometric_sampling.manifold_sampling.utils import (
 
 import sympy
 import numpy as np
-from numba import njit, float64
+from numba import njit, float64, types
 from scipy import optimize
 
 t = sympy.symbols("t")
@@ -55,11 +55,11 @@ def find_line_intersections(
         return p1 + np.random.choice(sols) * (p2 - p1)
 
 
-@njit(float64[:](float64[:], float64[:, :], float64[:]))
+@njit(types.Tuple((float64[:], float64))(float64[:], float64[:, :], float64[:]))
 def _newton_inner_loop(x, j_x, f_val):
     delta = np.linalg.solve(j_x, -f_val)
     x += delta
-    return x
+    return x, np.linalg.norm(delta)
 
 
 def newton_solver(F, J, x, eps):
@@ -67,40 +67,38 @@ def newton_solver(F, J, x, eps):
     Solve nonlinear system F=0 by Newton's method.
     J is the Jacobian of F. Both F and J must be functions of x.
     At input, x holds the start value. The iteration continues
-    until ||F|| < eps.
+    until |x_{i+1} - x_i| < eps.
     """
     x = x.copy()
     F_value = F(x)
-    F_norm = jitted_norm(F_value)  # l2 norm of vector
+    # delta norm is |x_{i+1} - x_i|, but initialized as |F(x_0)|
+    delta_norm = jitted_norm(F_value)
     iteration_counter = 0
-    while F_norm > eps and iteration_counter < NEWTON_MAX_ITER:
-        x = _newton_inner_loop(x, J(x), F_value)
+    while delta_norm > eps and iteration_counter < NEWTON_MAX_ITER:
+        x, delta_norm = _newton_inner_loop(x, J(x), F_value)
         F_value = F(x)
-        F_norm = jitted_norm(F_value)
         iteration_counter += 1
 
     # Here, either a solution is found, or too many iterations
-    if F_norm > eps:
+    if jitted_norm(F_value) > eps:
         x = np.NaN
     return x, iteration_counter, iteration_counter
 
 
 def scipy_solver(F, J, x, eps, method="hybr"):
+    maxiter_arg = "maxfev" if method == "hybr" else "maxiter"
     result = optimize.root(
         F,
         x,
         method=method,
-        options=dict(
-            maxfev=NEWTON_MAX_ITER,
-            maxiter=NEWTON_MAX_ITER,
-        ),
+        options={maxiter_arg:NEWTON_MAX_ITER},
         jac=J,
     )
 
     if J is None:
         result.njev = 0
 
-    if result.success:
+    if np.allclose(result.fun, 0, atol=eps):
         return result.x, result.nfev, result.njev
     else:
         return np.NaN, result.nfev, result.njev

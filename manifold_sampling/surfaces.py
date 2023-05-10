@@ -58,7 +58,7 @@ class ConstraintSurface:
         """Generate subspaces normal and tangent to manifold at x."""
         normal = self.generate_normal_space(x)
         Q, _ = np.linalg.qr(normal.T, mode="complete")
-        return Q[:, -self.n_dim + self.codim :].T, normal
+        return np.ascontiguousarray(Q[:, -self.n_dim + self.codim :].T), normal
 
     def _check_constraint(self, x):
         constraint_value = self.constraint_equation(x)

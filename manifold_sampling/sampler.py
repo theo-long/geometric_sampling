@@ -24,8 +24,8 @@ from tqdm import trange
 
 import torch
 import numpy as np
-from scipy import stats, optimize
-import sympy
+from scipy import stats
+from numba import njit, float64
 
 from logging import getLogger
 
@@ -93,6 +93,7 @@ class ManifoldMCMCSampler(Sampler):
         self.use_jac = use_jac
         self.projection_solver = projection_solver
         self.affine_coordinates = affine_coordinates
+        
         if inequality_constraints:
             self.inequality_constraints = inequality_constraints
         else:
@@ -209,7 +210,27 @@ class ManifoldMCMCSampler(Sampler):
 
         return new_point, RejectCode.NONE, 0
 
-    def step(self, current_point):
+    def train(self, n_train: int, initial_point: np.ndarray, verbose=True):
+        """Generate an index of points for fast newton initialization.
+
+        Args:
+            n_train (int): number of samples for index
+            initial_point (np.ndarray): initial point for sampling start
+        """
+
+        index_points, rej, _ = self.sample(n_train, initial_point=initial_point, verbose=verbose)
+        index_points = np.ascontiguousarray(index_points[rej == 0])
+
+        @njit(float64[::1](float64[::1], float64[:, ::1], float64[:, ::1]))
+        def initial_root(point, tangent_space, normal_space):
+            projection_vectors = (index_points - point)
+            index = ((projection_vectors @ tangent_space.T) ** 2).sum(axis=1).argmin()
+            root = projection_vectors[index] @ normal_space.T / (normal_space ** 2).sum(axis=1)
+            return root
+
+        self.generate_root = initial_root
+
+    def step(self, current_point, root_prediction):
 
         # Generate orthogonal basis for tangent plane and normal
         tangent_space, normal_space = self.surface.generate_tangent_and_normal_space(
@@ -226,7 +247,7 @@ class ManifoldMCMCSampler(Sampler):
         )
         v = (sample @ tangent_space).squeeze()
         # Solve for projected point
-        new_point, nfev, njev, root = self._project(current_point + v, normal_space)
+        new_point, nfev, njev, root = self._project(current_point + v, tangent_space, normal_space, root_prediction)
         step_info = StepInfo(nfev, njev, root, sample)
 
         # If projection fails, reject
@@ -271,16 +292,34 @@ class ManifoldMCMCSampler(Sampler):
 
         # reverse projection step
         if not self._reverse_projection(
-            current_point, new_point, new_normal_space, v_prime
+            current_point, new_point, new_tangent_space, new_normal_space, v_prime, root_prediction,
         ):
             step_info.reject_code = RejectCode.REVERSE_PROJECTION
             return current_point, step_info
 
         return new_point, step_info
 
-    def sample(self, n_samples, initial_point=None, verbose=True, log_info=False):
+    def sample(self, n_samples: int, initial_point:Optional[np.ndarray]=None, root_prediction:bool=False,  verbose:bool=True, log_info:bool=False):
+        """Sample points with MCMC.
+
+        Args:
+            n_samples (int): _description_
+            initial_point (Optional[np.ndarray], optional): Initial point to start sampling. Defaults to None.
+            root_prediction (bool, optional): Whether to use root prediction. Defaults to False.
+            verbose (bool, optional): Logging progress. Defaults to True.
+            log_info (bool, optional): Extra info like number of function evals. Defaults to False.
+
+        Returns:
+            points
+        """
+        
         if initial_point is None:
             initial_point = self._get_initial_point()
+        else:
+            initial_point = initial_point.astype(np.float64)
+
+        if root_prediction is True and not hasattr(self, "generate_root"):
+            raise ValueError("Must call train method first to use root prediction.")
 
         self.surface._check_constraint(initial_point)
         if not self._check_inequality_constraints(initial_point):
@@ -321,7 +360,7 @@ class ManifoldMCMCSampler(Sampler):
                     current_point
                 )
             else:
-                current_point, step_info = self.step(current_point)
+                current_point, step_info = self.step(current_point, root_prediction)
 
             if self.affine_coordinates:
                 current_point = change_affine_coordinates(current_point)
@@ -345,8 +384,10 @@ class ManifoldMCMCSampler(Sampler):
         self,
         current_point: np.ndarray,
         new_point: np.ndarray,
+        new_tangent_space: np.ndarray,
         new_normal_space: np.ndarray,
         v_prime: np.ndarray,
+        root_prediction: bool,
     ):
         """Check if reverse projection new_point -> current_point is possible and is solved by Newton.
         Returns v_prime reverse tangent vector and p_v_prime, probability of selecting that vector
@@ -359,7 +400,7 @@ class ManifoldMCMCSampler(Sampler):
         """
 
         # check Newton solver converges to reverse point
-        reverse_point, _, _, _ = self._project(new_point + v_prime, new_normal_space)
+        reverse_point, _, _, _ = self._project(new_point + v_prime, new_tangent_space, new_normal_space, root_prediction)
         if reverse_point is None:
             return False
         if not np.allclose(current_point, reverse_point, atol=self.surface.tol):
@@ -367,12 +408,13 @@ class ManifoldMCMCSampler(Sampler):
 
         return True
 
-    def _project(self, point: torch.Tensor, normal_space: torch.Tensor):
+    def _project(self, point: np.ndarray, tangent_space: np.ndarray, normal_space: np.ndarray, root_prediction):
         """Compute projection of point to surface along normal using Newton's method.
 
         Args:
-            point (torch.Tensor): starting point
-            normal_space (torch.Tensor): normal space of surface corresponding to specific point
+            point (np.ndarray): starting point
+            tangent_space (np.ndarray): tangent space of surface corresponding to specific point
+            normal_space (np.ndarray): normal space of surface corresponding to specific point
             n_iterations (int, optional): max number of iterations for Newton's method. Defaults to 50.
 
         Returns:
@@ -392,18 +434,23 @@ class ManifoldMCMCSampler(Sampler):
         else:
             projected_jacobian = None
 
+        if root_prediction:
+            x0 = self.generate_root(point, tangent_space, normal_space)
+        else:
+            x0 = self._normal_space_mean
+
         if self.projection_solver == "newton":
             root, nfev, njev = newton_solver(
-                projection_equation,
-                projected_jacobian,
-                self._normal_space_mean,
+                F=projection_equation,
+                J=projected_jacobian,
+                x=x0,
                 eps=1.49012e-08,
             )
         else:
             root, nfev, njev = scipy_solver(
-                projection_equation,
-                projected_jacobian,
-                self._normal_space_mean,
+                F=projection_equation,
+                J=projected_jacobian,
+                x=x0,
                 eps=1.49012e-08,
                 method=self.projection_solver,
             )
