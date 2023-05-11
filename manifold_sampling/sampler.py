@@ -158,6 +158,7 @@ class ManifoldMCMCSampler(Sampler):
         (
             new_tangent_space,
             new_normal_space,
+            new_n_hat,
         ) = self.surface.generate_tangent_and_normal_space(new_point)
 
         # find v_prime by projecting new_point - current_point onto tangent space
@@ -174,7 +175,7 @@ class ManifoldMCMCSampler(Sampler):
 
     def multiple_solution_step(self, current_point):
         # Generate orthogonal basis for tangent plane and normal
-        tangent_space, normal_space = self.surface.generate_tangent_and_normal_space(
+        tangent_space, normal_space, n_hat = self.surface.generate_tangent_and_normal_space(
             current_point
         )
 
@@ -217,15 +218,15 @@ class ManifoldMCMCSampler(Sampler):
             n_train (int): number of samples for index
             initial_point (np.ndarray): initial point for sampling start
         """
-
-        index_points, rej, _ = self.sample(n_train, initial_point=initial_point, verbose=verbose)
-        index_points = np.ascontiguousarray(index_points[rej == 0])
+        # Sample 2x as many and only take last n_train
+        index_points, rej, _ = self.sample(2 * n_train, initial_point=initial_point, verbose=verbose)
+        index_points = np.ascontiguousarray(index_points[rej == 0][-n_train:])
 
         @njit(float64[::1](float64[::1], float64[:, ::1], float64[:, ::1]))
-        def initial_root(point, tangent_space, normal_space):
+        def initial_root(point, tangent_space, n_hat):
             projection_vectors = (index_points - point)
             index = ((projection_vectors @ tangent_space.T) ** 2).sum(axis=1).argmin()
-            root = projection_vectors[index] @ normal_space.T / (normal_space ** 2).sum(axis=1)
+            root = projection_vectors[index] @ n_hat.T
             return root
 
         self.generate_root = initial_root
@@ -233,7 +234,7 @@ class ManifoldMCMCSampler(Sampler):
     def step(self, current_point, root_prediction):
 
         # Generate orthogonal basis for tangent plane and normal
-        tangent_space, normal_space = self.surface.generate_tangent_and_normal_space(
+        tangent_space, normal_space, n_hat = self.surface.generate_tangent_and_normal_space(
             current_point
         )
 
@@ -247,7 +248,7 @@ class ManifoldMCMCSampler(Sampler):
         )
         v = (sample @ tangent_space).squeeze()
         # Solve for projected point
-        new_point, nfev, njev, root = self._project(current_point + v, tangent_space, normal_space, root_prediction)
+        new_point, nfev, njev, root = self._project(current_point + v, tangent_space, n_hat, root_prediction)
         step_info = StepInfo(nfev, njev, root, sample)
 
         # If projection fails, reject
@@ -264,6 +265,7 @@ class ManifoldMCMCSampler(Sampler):
         (
             new_tangent_space,
             new_normal_space,
+            new_n_hat,
         ) = self.surface.generate_tangent_and_normal_space(new_point)
 
         # find v_prime by projecting new_point - current_point onto tangent space
@@ -284,7 +286,7 @@ class ManifoldMCMCSampler(Sampler):
         prob_ratio = (self.density_function(new_point) * p_v_prime) / (
             self.density_function(current_point) * p_v
         )
-        # detJ_ratio = (normal_space @ normal_space.T) / (new_normal_space @ new_normal_space.T)
+
         acceptance_prob = prob_ratio
         if u > acceptance_prob:
             step_info.reject_code = RejectCode.MH
@@ -292,7 +294,7 @@ class ManifoldMCMCSampler(Sampler):
 
         # reverse projection step
         if not self._reverse_projection(
-            current_point, new_point, new_tangent_space, new_normal_space, v_prime, root_prediction,
+            current_point, new_point, new_tangent_space, new_n_hat, v_prime, root_prediction,
         ):
             step_info.reject_code = RejectCode.REVERSE_PROJECTION
             return current_point, step_info
@@ -385,7 +387,7 @@ class ManifoldMCMCSampler(Sampler):
         current_point: np.ndarray,
         new_point: np.ndarray,
         new_tangent_space: np.ndarray,
-        new_normal_space: np.ndarray,
+        new_n_hat: np.ndarray,
         v_prime: np.ndarray,
         root_prediction: bool,
     ):
@@ -395,12 +397,13 @@ class ManifoldMCMCSampler(Sampler):
         Args:
             current_point (np.ndarray): starting point of mcmc step
             new_point (np.ndarray): new point found after projection step
-            new_normal_space (np.ndarray)
+            new_tangent_space (np.ndarray)
+            new_n_hat (np.ndarray)
             v_prime (np.ndarray)
         """
 
         # check Newton solver converges to reverse point
-        reverse_point, _, _, _ = self._project(new_point + v_prime, new_tangent_space, new_normal_space, root_prediction)
+        reverse_point, _, _, _ = self._project(new_point + v_prime, new_tangent_space, new_n_hat, root_prediction)
         if reverse_point is None:
             return False
         if not np.allclose(current_point, reverse_point, atol=self.surface.tol):
@@ -408,13 +411,13 @@ class ManifoldMCMCSampler(Sampler):
 
         return True
 
-    def _project(self, point: np.ndarray, tangent_space: np.ndarray, normal_space: np.ndarray, root_prediction):
+    def _project(self, point: np.ndarray, tangent_space: np.ndarray, n_hat: np.ndarray, root_prediction):
         """Compute projection of point to surface along normal using Newton's method.
 
         Args:
             point (np.ndarray): starting point
             tangent_space (np.ndarray): tangent space of surface corresponding to specific point
-            normal_space (np.ndarray): normal space of surface corresponding to specific point
+            n_hat (np.ndarray): orthonormalized matrix representation of normal space of surface corresponding to specific point
             n_iterations (int, optional): max number of iterations for Newton's method. Defaults to 50.
 
         Returns:
@@ -423,19 +426,19 @@ class ManifoldMCMCSampler(Sampler):
 
         def projection_equation(x):
             return self.surface.jitted_constraint_equation(
-                point + x @ normal_space
+                point + x @ n_hat
             ).squeeze(1)
 
         if self.use_jac:
             projected_jacobian = (
-                lambda x: self.surface.jitted_jacobian(point + x @ normal_space)
-                @ normal_space.T
+                lambda x: self.surface.jitted_jacobian(point + x @ n_hat)
+                @ n_hat.T
             )
         else:
             projected_jacobian = None
 
         if root_prediction:
-            x0 = self.generate_root(point, tangent_space, normal_space)
+            x0 = self.generate_root(point, tangent_space, n_hat)
         else:
             x0 = self._normal_space_mean
 
@@ -458,7 +461,7 @@ class ManifoldMCMCSampler(Sampler):
         if root is np.NaN:
             projection = None
         else:
-            projection = point + root @ normal_space
+            projection = point + root @ n_hat
 
         return projection, nfev, njev, root
 

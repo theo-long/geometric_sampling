@@ -55,10 +55,11 @@ class ConstraintSurface:
         return result
 
     def generate_tangent_and_normal_space(self, x: torch.Tensor):
-        """Generate subspaces normal and tangent to manifold at x."""
+        """Generate subspaces normal and tangent to manifold at x, as well as orthonormal version of normal space."""
         normal = self.generate_normal_space(x)
         Q, _ = np.linalg.qr(normal.T, mode="complete")
-        return np.ascontiguousarray(Q[:, -self.n_dim + self.codim :].T), normal
+        n_hat, tangent_space = np.array_split(Q.T, [-self.n_dim + self.codim])
+        return np.ascontiguousarray(tangent_space), normal, np.ascontiguousarray(n_hat)
 
     def _check_constraint(self, x):
         constraint_value = self.constraint_equation(x)
