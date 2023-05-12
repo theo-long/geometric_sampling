@@ -11,7 +11,7 @@ import sympy
 from sympy import symbols
 import cyjax
 
-x0, x1, x2 = symbols("x:3")
+x0, x1, x2, x3 = symbols("x:4")
 
 DEFAULT_TOLERANCE = 1e-12
 
@@ -386,6 +386,17 @@ class ComplexVariety(AlgebraicSurface):
         re, im = sympy.poly(re), sympy.poly(im)
         re, im = re.subs(zip(re.args[1:], re_im_symbols)), im.subs(zip(im.args[1:], re_im_symbols))
         super().__init__(n_dim=2 * (len(poly.args) - 1), constraint_equations=[re, im], args=re_im_symbols, tol=tol)
+
+_eq1 = x0 ** 4 - x1**2 * x2**2 + x2**3 * x3 + x0 * x2 ** 3 - x1 * x3 + x3 ** 2 - x2 + 1
+_eq2 = x3 ** 4 - x1**3 * x2 + x2**3 * x3 + x0 ** 3 - x1 * x0 - x2 + 1
+quartic1 = AlgebraicSurface(n_dim=4, constraint_equations=[sympy.Poly(_eq1), sympy.Poly(_eq2)])
+
+_eq3 = -x0 ** 2 * x1 ** 2 - x3 ** 3 * x2 + x0 ** 2 + x2 ** 2 - x1 ** 2 + x3 - 1
+_eq4 = x0 * x3 ** 3 - x1 * x2 * x3 + - x0 - x2 + 1
+quartic2 = AlgebraicSurface(n_dim=4, constraint_equations=[sympy.Poly(_eq3), sympy.Poly(_eq4)])
+
+quartic_initial_point = np.array([0, 0, 1, 0])
+quartic_constraints = [lambda x : 2 + 1e-10 - np.abs(x).max()]
 
 def _euclidean_metric(n_dim):
     return lambda x: np.eye(n_dim)
