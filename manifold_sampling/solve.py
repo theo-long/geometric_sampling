@@ -1,6 +1,6 @@
 from geometric_sampling.manifold_sampling.surfaces import AlgebraicSurface
 from geometric_sampling.manifold_sampling.utils import (
-    sympy_func_to_array_func,
+    sympy_func_to_jit_func,
     jitted_norm,
 )
 
@@ -8,6 +8,7 @@ import sympy
 import numpy as np
 from numba import njit, float64, types
 from scipy import optimize
+from typing import List
 
 t = sympy.symbols("t")
 NEWTON_MAX_ITER = 50
@@ -22,7 +23,7 @@ def generate_line_equation_coefficients(surface: AlgebraicSurface):
         zip(sympy.symbols(f"x:{surface.n_dim}"), line)
     )
     coeffs = sympy.Poly(exp, t).all_coeffs()
-    line_eq_coeffs = sympy_func_to_array_func(p + q, coeffs)
+    line_eq_coeffs = sympy_func_to_jit_func(p + q, coeffs)
     return line_eq_coeffs
 
 

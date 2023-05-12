@@ -71,6 +71,7 @@ class ManifoldMCMCSampler(Sampler):
         min_scale=0.1,
         use_jac=True,
         multiple_sol_every=None,
+        multiple_sol_weights="equal",
         projection_solver="newton",
         affine_coordinates=False,
     ) -> None:
@@ -86,6 +87,8 @@ class ManifoldMCMCSampler(Sampler):
             min_scale (float, optional): minimum scale parameter for curvature adaptation. Defaults to 0.1.
             use_jac (bool, optional): Whether or not to use gradients for projection steps. Defaults to True.
             multiple_sol_every (int, optional): Use multiple solution sampling every this many steps. If None do not use.
+            multiple_sol_weights (str): How to weight the probability of picking one of multiple solutions. 
+            If "farthest" default to farthest from current, if "equal" weight equally
             projection_solver (str): Which solver to use for projection step. Can be "newton" or "hybr" for scipy powell hybrid. Default is "newton"
         """
         self.surface = surface
@@ -129,29 +132,36 @@ class ManifoldMCMCSampler(Sampler):
                     "Multiple solution sampling only implemented for codimension 1."
                 )
             self.line_eq_coeffs = generate_line_equation_coefficients(self.surface)
+            if multiple_sol_weights == "farthest":
+                self.solution_weights = np.ones(20)
+                self.solution_weights[0] = 5
+            elif multiple_sol_weights == "equal":
+                self.solution_weights = np.ones(20)
+            else:
+                raise ValueError("unrecognized value for multiple_sol_weights argument")
 
     def _multiple_projection(self, point, normal_space, return_all=False):
         # Solve for projected point
-        line_eq_coeffs = self.line_eq_coeffs(point, point + normal_space[0])
+        line_eq_coeffs = self.line_eq_coeffs(np.concatenate([point, point + normal_space[0]]))
         poly = np.polynomial.Polynomial(line_eq_coeffs[::-1])
         roots = poly.roots()
-        real_roots = np.real(roots[(np.abs(np.imag(roots)) < 1e-14)])
+        real_roots = np.real(roots[(np.abs(np.imag(roots)) < 1e-12)])
 
         if len(real_roots) == 0:
-            return None
+            return None, None, np.NaN
 
         # Sort by distance and choose according to weighting
-        real_roots = real_roots[np.argsort(np.abs(real_roots))]
+        real_roots = real_roots[np.argsort(np.abs(real_roots))[::-1]]
         p = self.solution_weights[: real_roots.shape[0]]
         p = p / p.sum()
 
         if return_all:
-            return real_roots, p
+            return point + real_roots[:, None] * normal_space, p
 
         root = np.random.choice(real_roots, p=p)
         new_point = point + root * normal_space[0]
         w = p[real_roots == root]
-        return new_point, w
+        return new_point, w, root
 
     def _reverse_multiple_projection(self, current_point, new_point):
         # Find v' and p(v') for reverse projection step
@@ -168,10 +178,21 @@ class ManifoldMCMCSampler(Sampler):
         v_prime = (dtangent.T @ new_tangent_space).squeeze()
 
         points, w_primes = self._multiple_projection(
-            new_point + v_prime, new_normal_space
+            new_point + v_prime, new_normal_space, return_all=True
         )
-        index = (points - new_point).argmin()
-        return v_prime, w_primes[index]
+        if points is None:
+            return None, None
+
+        deltas = np.abs(points - current_point).sum(axis=1)
+        index, val = deltas.argmin(), deltas.min()
+        if val > 1e-8:
+            return None, None
+
+        covariance = self.adaptive_scale(new_point)
+        p_v_prime = stats.multivariate_normal.pdf(
+            dtangent.T, mean=self._tangent_space_mean, cov=covariance
+        )
+        return p_v_prime, w_primes[index]
 
     def multiple_solution_step(self, current_point):
         # Generate orthogonal basis for tangent plane and normal
@@ -189,17 +210,22 @@ class ManifoldMCMCSampler(Sampler):
             sample, mean=self._tangent_space_mean, cov=covariance
         )
 
-        new_point, w = self._multiple_projection(current_point + v, normal_space)
+        new_point, w, root = self._multiple_projection(current_point + v, normal_space)
+        step_info = StepInfo(nfev=0, njev=0, root=root, v=sample)
 
         # If projection fails, reject
         if new_point is None:
-            return current_point, RejectCode.PROJECTION, 0
+            step_info.reject_code = RejectCode.PROJECTION
+            return current_point, step_info
 
         inequality_satisfaction = self._check_inequality_constraints(new_point)
         if not inequality_satisfaction:
-            return current_point, RejectCode.INEQUALITY, 0
+            step_info.reject_code = RejectCode.INEQUALITY
+            return current_point, step_info
 
         p_v_prime, w_prime = self._reverse_multiple_projection(current_point, new_point)
+        if not p_v_prime:
+            return current_point, RejectCode.REVERSE_PROJECTION, 0
 
         # Metropolis-Hastings rejection step
         u = np.random.random()
@@ -207,9 +233,10 @@ class ManifoldMCMCSampler(Sampler):
             self.density_function(current_point) * p_v * w
         )
         if u > acceptance_prob:
-            return current_point, RejectCode.MH, 0
+            step_info.reject_code = RejectCode.MH
+            return current_point, step_info
 
-        return new_point, RejectCode.NONE, 0
+        return new_point, step_info
 
     def train(self, n_train: int, initial_point: np.ndarray, verbose=True):
         """Generate an index of points for fast newton initialization.
@@ -358,7 +385,7 @@ class ManifoldMCMCSampler(Sampler):
         iterable = trange(1, n_samples) if verbose else range(1, n_samples)
         for i in iterable:
             if i % multiple_sol_every == 0 and i > 0:
-                current_point, reject_code, nfev = self.multiple_solution_step(
+                current_point, step_info = self.multiple_solution_step(
                     current_point
                 )
             else:
