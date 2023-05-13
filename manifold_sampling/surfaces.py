@@ -15,7 +15,8 @@ x0, x1, x2, x3 = symbols("x:4")
 
 DEFAULT_TOLERANCE = 1e-12
 
-
+def _euclidean_metric(n_dim):
+    return lambda x: np.eye(n_dim)
 class ConstraintSurface:
     def __init__(
         self,
@@ -26,7 +27,7 @@ class ConstraintSurface:
     ) -> None:
         self.n_dim = n_dim
         self.constraint_equation = constraint_equation
-        self.jitted_constraint_equation = constraint_equations
+        self.jitted_constraint_equation = constraint_equation
         self.complex = False
         if metric:
             self.metric = metric
@@ -397,6 +398,3 @@ quartic2 = AlgebraicSurface(n_dim=4, constraint_equations=[sympy.Poly(_eq3), sym
 
 quartic_initial_point = np.array([0, 0, 1, 0])
 quartic_constraints = [lambda x : 2 + 1e-10 - np.abs(x).max()]
-
-def _euclidean_metric(n_dim):
-    return lambda x: np.eye(n_dim)
