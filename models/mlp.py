@@ -4,27 +4,31 @@ import torch.nn as nn
 
 class LinearBlock(nn.Module):
     def __init__(
-        self, input_size: int, output_size: int, activation, norm
+        self, in_features: int, out_features: int, activation, norm, bias=True,
     ):
         """Basic MLP block
 
         Args:
-            input_size (int): size of input vector
-            output_size (int): size of output vector
+            in_features (int): size of input vector
+            out_features (int): size of output vector
             norm : norm layer
         """
         super().__init__()
-        self.input_size = input_size
-        self.output_size = output_size
+        self.in_features = in_features
+        self.out_features = out_features
         self.activation = activation
+        self.bias = bias
 
-        self.layers = nn.Sequential(
-            nn.Linear(input_size, output_size),
-            norm(num_features=output_size),
-        )
+        layers = [nn.Linear(in_features, out_features, bias=bias)]
+        if norm is not None:
+            layers.append(norm(num_features=out_features))
+
+        self.layers = nn.Sequential(*layers)
 
     def forward(self, x):
         x = self.layers(x)
+        if self.activation is not None:
+            x = self.activation(x)
         return x
 
 
@@ -38,6 +42,7 @@ class MLP(nn.Module):
         activation=nn.functional.relu,
         norm=nn.LayerNorm,
         residual: bool = True,
+        bias=True,
     ):
         super().__init__()
         self.input_size = input_size
@@ -46,11 +51,12 @@ class MLP(nn.Module):
         self.depth = depth
         self.residual = residual
         self.activation = activation
+        self.bias = bias
 
-        layers = [LinearBlock(input_size, width, norm)]
+        layers = [LinearBlock(input_size, width, activation, norm, bias)]
         for i in range(depth - 1):
-            layers.append(LinearBlock(width, width, norm))
-        layers.append(nn.Linear(width, output_size))
+            layers.append(LinearBlock(width, width, activation, norm, bias))
+        layers.append(nn.Linear(width, output_size, bias))
 
         self.layers = nn.ModuleList(layers)
 
@@ -59,11 +65,11 @@ class MLP(nn.Module):
             self.activations = []
 
         for i, layer in enumerate(self.layers):
-            if (layer.input_size == layer.output_size) and self.residual:
+            if (layer.in_features == layer.out_features) and self.residual:
                 y = layer(x)
                 if save_activations:
                     self.activations.append(y)
-                x = x + self.activation(y)
+                x = x + y
             else:
                 x = layer(x)
         return x

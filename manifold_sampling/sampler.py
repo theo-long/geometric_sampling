@@ -16,7 +16,7 @@ from geometric_sampling.manifold_sampling.solve import (
 )
 from geometric_sampling.manifold_sampling.errors import ConstraintError, RejectCode
 
-from typing import Optional, Callable, List
+from typing import Optional, Callable, List, Union
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from multiprocess import Pool
@@ -694,7 +694,7 @@ class LinearSubspaceSampler(Sampler):
         pass
 
 
-def get_sphere_points(n_dim, n_pairs: int, centre: torch.tensor, radius: float):
+def get_sphere_points(n_dim, n_pairs: int, centre: torch.tensor, radius: Union[float, Callable]):
     gaussian_samples = np.random.multivariate_normal(
         mean=np.zeros(n_dim),
         cov=np.eye(n_dim),
@@ -704,11 +704,48 @@ def get_sphere_points(n_dim, n_pairs: int, centre: torch.tensor, radius: float):
         np.linalg.norm(gaussian_samples, axis=-1), -1
     )
 
+    if isinstance(radius, Callable):
+        radius = radius(n_pairs)
+        radius = radius[:, None, None]
+        
     # scale and transform
     sphere_samples *= radius
     sphere_samples += np.expand_dims(centre.T, 0)
 
     return sphere_samples.transpose(1, 0, 2)
+
+def sphere_sample(
+    n_samples, 
+    surface,
+    centre,
+    radius: Union[float, Callable], 
+    line_eq_coeffs, 
+    inequality_constraint=None, 
+    verbose=False
+):
+
+    p1, p2 = get_sphere_points(surface.n_dim, n_samples, centre, radius)
+    samples = []
+    if verbose:
+        iterable = trange(n_samples)
+    else:
+        iterable = range(n_samples)
+    for i in iterable:
+        p, q = p1[i], p2[i]
+        coeffs = line_eq_coeffs(np.concatenate([p, q]))
+        intersection_points = find_line_intersections(
+            coeffs, p, q, return_all=True,
+        )
+        if intersection_points is not None:
+            samples.append(intersection_points)
+            
+    samples = np.concatenate(samples)
+    if inequality_constraint is not None:
+        samples = samples[inequality_constraint(samples.T) > 0]
+    
+    area_ratio = samples.shape[0] / (2 * n_samples)
+
+    return samples, area_ratio
 
 
 def multiprocess_samples(
