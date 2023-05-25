@@ -61,16 +61,20 @@ def calculate_loss(
     # Note - we reshape both to an N_surface x N_theta matrix for calculating loss
     if pass_as_xy:
         phi_probs = final_activation(
-            torch.concatenate([torch.cos(phi_vals), torch.sin(phi_vals)], dim=-1)
+            phi_model(
+                torch.concatenate([torch.cos(phi_vals), torch.sin(phi_vals)], dim=-1)
+            )
         ).squeeze()
         theta_probs = final_activation(
-            torch.concatenate([torch.cos(theta_vals), torch.sin(theta_vals)], dim=-1)
+            theta_model(
+                torch.concatenate(
+                    [torch.cos(theta_vals), torch.sin(theta_vals)], dim=-1
+                )
+            )
         ).squeeze()
     else:
         phi_probs = final_activation(phi_model(phi_vals)).squeeze()
-        theta_probs = final_activation(
-            theta_model(theta_vals)
-        ).squeeze()
+        theta_probs = final_activation(theta_model(theta_vals)).squeeze()
 
     phi_probs = phi_probs / phi_probs.sum()
     theta_probs = theta_probs / theta_probs.sum()
