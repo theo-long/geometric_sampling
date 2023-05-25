@@ -67,9 +67,9 @@ def calculate_loss(
             torch.concatenate([torch.cos(theta_vals), torch.sin(theta_vals)], dim=-1)
         ).squeeze()
     else:
-        phi_probs = final_activation(phi_model(phi_vals) / (2 * torch.pi)).squeeze()
+        phi_probs = final_activation(phi_model(phi_vals)).squeeze()
         theta_probs = final_activation(
-            theta_model(theta_vals) / (2 * torch.pi)
+            theta_model(theta_vals)
         ).squeeze()
 
     phi_probs = phi_probs / phi_probs.sum()

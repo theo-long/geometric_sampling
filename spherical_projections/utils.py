@@ -9,4 +9,4 @@ class ModelDistribution:
         
     def pdf(self, x):
         with torch.no_grad():
-            return self.final_activation(self.model(torch.tensor([x / (2 * np.pi)]))).numpy()[0]
+            return self.final_activation(self.model(torch.tensor([x]))).numpy()[0]
