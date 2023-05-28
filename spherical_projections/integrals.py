@@ -35,7 +35,7 @@ def generate_coarea_factor(
 
 def integrand(theta_val, surface: AlgebraicSurface, surface_point, density_func=None):
     coarea_factor, phi_val = generate_coarea_factor(theta_val, surface, surface_point)
-    if density_func:
+    if density_func is not None:
         prob_theta_phi = density_func(theta_val, phi_val)
     else:
         prob_theta_phi = 1
