@@ -76,7 +76,12 @@ def newton_solver(F, J, x, eps):
     delta_norm = jitted_norm(F_value)
     iteration_counter = 0
     while delta_norm > eps and iteration_counter < NEWTON_MAX_ITER:
-        x, delta_norm = _newton_inner_loop(x, J(x), F_value)
+        try:
+            x, delta_norm = _newton_inner_loop(x, J(x), F_value)
+        except Exception:
+            x = np.NaN
+            iteration_counter += 1
+            break
         F_value = F(x)
         iteration_counter += 1
 
