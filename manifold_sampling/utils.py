@@ -35,6 +35,22 @@ def sympy_func_to_jit_func(args, expr: sympy.Expr):
     f = njit(sympy.lambdify(args, expr, modules=["scipy", "numpy"], cse=True))
     def unpacked_f(a):
         return f(*a) # We assume rows correspond to different args
+
+    try:
+        unpacked_f(np.ones(len(args)))
+    except AssertionError:
+        print("Assertion Fallback")
+        # Fallback for a case numba doesn't like
+
+        matrix_str = "np." + repr(np.array(expr)).replace(", dtype=object", "")
+        symbol_str = ", ".join([str(s) for s in args])
+
+        func_str = f"""lambda {symbol_str}: {matrix_str}"""
+        f = eval(func_str)
+
+        def unpacked_f(a):
+            return f(*a)
+
     return unpacked_f
 
 def torus_surface_element(U, V, r, R):
